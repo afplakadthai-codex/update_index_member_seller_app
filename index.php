@@ -746,10 +746,10 @@ if ($isSellerApproved && $userId > 0) {
                     MAX(COALESCE(o.order_number, o.order_code, CONCAT('ORD-', o.id))) AS order_code,
                     MAX(COALESCE(r.requested_at, r.created_at)) AS requested_at,
                     MAX(COALESCE(r.approved_at, r.processed_at, r.updated_at)) AS approved_at,
-                    MAX(COALESCE(r.status, 'pending')) AS refund_status
-					MAX(COALESCE(r.requested_refund_amount, r.requested_amount, 0)) AS requested_refund_amount,
+                    MAX(COALESCE(r.status, 'pending')) AS refund_status,
+                    MAX(COALESCE(r.requested_refund_amount, r.requested_amount, 0)) AS requested_refund_amount,      
                     MAX(COALESCE(r.approved_refund_amount, r.approved_amount, 0)) AS approved_refund_amount,
-                    MAX(COALESCE(r.currency, o.currency, 'USD')) AS currency,					
+                    MAX(COALESCE(r.currency, o.currency, 'USD')) AS currency
                 FROM order_refunds r
                 INNER JOIN order_refund_items ri ON ri.refund_id = r.id
                 INNER JOIN order_items oi ON oi.id = ri.order_item_id
@@ -766,10 +766,9 @@ if ($isSellerApproved && $userId > 0) {
 
             foreach ($sellerRecentRefunds as $row) {
                 $rStatus = strtolower(trim((string)($row['refund_status'] ?? '')));
-				if (in_array($rStatus, ['pending_approval', 'approved', 'processing'], true)) {
+                if (in_array($rStatus, ['pending_approval', 'approved', 'processing'], true)) {
                     $sellerDashboardStats['refund_pending']++;
-                } else {
-	               } elseif (in_array($rStatus, ['refunded', 'rejected', 'failed', 'cancelled'], true)) {				
+                } elseif (in_array($rStatus, ['refunded', 'rejected', 'failed', 'cancelled'], true)) {	
                     $sellerDashboardStats['refund_processed']++;
                 }
             }
