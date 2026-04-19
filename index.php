@@ -101,6 +101,132 @@ if (!function_exists('bv_member_offer_listing_url')) {
     }
 }
 
+
+
+if (!function_exists('bv_member_sd_e')) {
+    function bv_member_sd_e($value): string
+    {
+        return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (!function_exists('bv_member_sd_pdo')) {
+    function bv_member_sd_pdo(): PDO
+    {
+        return bv_member_pdo();
+    }
+}
+
+if (!function_exists('bv_member_sd_seller_id')) {
+    function bv_member_sd_seller_id(array $user): int
+    {
+        return (int)($user['id'] ?? 0);
+    }
+}
+
+if (!function_exists('bv_member_sd_display_name')) {
+    function bv_member_sd_display_name(array $user): string
+    {
+        $name = trim((string)($user['display_name'] ?? ''));
+        if ($name !== '') {
+            return $name;
+        }
+        return bv_member_user_display_name($user);
+    }
+}
+
+if (!function_exists('bv_member_sd_is_seller_approved')) {
+    function bv_member_sd_is_seller_approved(PDO $pdo, array $user): bool
+    {
+        return bv_member_is_seller_approved($pdo, $user);
+    }
+}
+
+if (!function_exists('bv_member_sd_table_exists')) {
+    function bv_member_sd_table_exists(PDO $pdo, string $table): bool
+    {
+        return bv_member_table_exists($pdo, $table);
+    }
+}
+
+if (!function_exists('bv_member_sd_columns')) {
+    function bv_member_sd_columns(PDO $pdo, string $table): array
+    {
+        return bv_member_generic_table_columns($pdo, $table);
+    }
+}
+
+if (!function_exists('bv_member_sd_url')) {
+    function bv_member_sd_url(string $path, array $params = []): string
+    {
+        $path = '/' . ltrim($path, '/');
+        if (!$params) {
+            return $path;
+        }
+        return $path . '?' . http_build_query($params);
+    }
+}
+
+if (!function_exists('bv_member_sd_existing_page')) {
+    function bv_member_sd_existing_page(array $candidates): string
+    {
+        static $cache = [];
+        $root = rtrim((string)($_SERVER['DOCUMENT_ROOT'] ?? dirname(__DIR__, 1)), '/');
+
+        foreach ($candidates as $candidate) {
+            $path = '/' . ltrim((string)$candidate, '/');
+            if (isset($cache[$path])) {
+                if ($cache[$path]) {
+                    return $path;
+                }
+                continue;
+            }
+            $exists = false;
+            $full = $root . $path;
+            if (is_file($full)) {
+                $exists = true;
+            } else {
+                $alt = dirname(__DIR__, 1) . $path;
+                if (is_file($alt)) {
+                    $exists = true;
+                }
+            }
+            $cache[$path] = $exists;
+            if ($exists) {
+                return $path;
+            }
+        }
+
+        return '/' . ltrim((string)($candidates[0] ?? ''), '/');
+    }
+}
+
+if (!function_exists('bv_member_sd_money')) {
+    function bv_member_sd_money(float $amount, string $currency = 'USD'): string
+    {
+        return bv_member_offer_money($amount, $currency);
+    }
+}
+
+if (!function_exists('bv_member_sd_status_badge')) {
+    function bv_member_sd_status_badge(string $status): array
+    {
+        $status = strtolower(trim($status));
+        $label = ucfirst($status !== '' ? str_replace('_', ' ', $status) : 'Unknown');
+        $class = 'gray';
+
+        if (in_array($status, ['paid', 'processing', 'confirmed', 'packing', 'shipped', 'completed', 'success'], true)) {
+            $class = 'green';
+        } elseif (in_array($status, ['pending', 'new', 'awaiting_payment', 'open', 'requested', 'submitted'], true)) {
+            $class = 'gold';
+        } elseif (in_array($status, ['refunded', 'approved', 'accepted', 'handled'], true)) {
+            $class = 'blue';
+        }
+
+        return [$label, $class];
+    }
+}
+
 $pdo = bv_member_pdo();
 $user = bv_member_require_login();
 $flash = bv_member_flash_get();
@@ -143,6 +269,20 @@ $offerFeatureAvailable = false;
 $recentBuyerOffers = [];
 $recentSellerOffers = [];
 $offerError = '';
+
+$sellerDashboardStats = [
+    'new_orders' => 0,
+    'paid_orders' => 0,
+    'refund_pending' => 0,
+    'refund_processed' => 0,
+    'open_offers' => 0,
+    'this_month_sales' => 0.0,
+    'currency' => 'USD',
+];
+$sellerRecentOrders = [];
+$sellerRecentRefunds = [];
+$sellerRecentOfferThreads = [];
+$sellerSalesMonthly = [];
 
 $userId = (int)($user['id'] ?? 0);
 $buyerProfile = null;
@@ -546,6 +686,162 @@ if ($userId > 0) {
     }
 }
 
+
+if ($isSellerApproved && $userId > 0) {
+    $sellerId = bv_member_sd_seller_id($user);
+
+    $orderPage = bv_member_sd_existing_page(['/seller/order_detail.php', '/member/order_detail.php', '/member/order_view.php', '/seller/orders.php']);
+    $refundPage = bv_member_sd_existing_page(['/seller/refund_view.php', '/seller/refunds.php']);
+    $offerPage = bv_member_sd_existing_page(['/offer.php', '/seller/offers.php']);
+
+    try {
+        if (bv_member_sd_table_exists($pdo, 'orders') && bv_member_sd_table_exists($pdo, 'order_items') && bv_member_sd_table_exists($pdo, 'listings')) {
+            $sql = "
+                SELECT
+                    o.id AS order_id,
+                    MAX(COALESCE(o.order_number, o.order_code, CONCAT('ORD-', o.id))) AS order_code,
+                    MAX(COALESCE(o.buyer_name, o.customer_name, u.display_name, u.first_name, u.email, 'Buyer')) AS buyer_name,
+                    MAX(COALESCE(l.title, CONCAT('Listing #', oi.listing_id))) AS listing_title,
+                    SUM(COALESCE(oi.quantity, oi.qty, 1)) AS qty,
+                    SUM(COALESCE(oi.total_price, oi.line_total, oi.subtotal, (COALESCE(oi.price, oi.unit_price, 0) * COALESCE(oi.quantity, oi.qty, 1)))) AS total,
+                    MAX(COALESCE(o.status, 'pending')) AS order_status,
+                    MAX(COALESCE(o.payment_status, o.payment_state, 'pending')) AS payment_status,
+                    MAX(COALESCE(o.currency, oi.currency, 'USD')) AS currency,
+                    MAX(COALESCE(o.created_at, o.updated_at)) AS created_at
+                FROM orders o
+                INNER JOIN order_items oi ON oi.order_id = o.id
+                INNER JOIN listings l ON l.id = oi.listing_id
+                LEFT JOIN users u ON u.id = COALESCE(o.buyer_user_id, o.user_id, o.member_id)
+                WHERE l.seller_id = :seller_id
+                GROUP BY o.id
+                ORDER BY MAX(COALESCE(o.created_at, o.updated_at)) DESC, o.id DESC
+                LIMIT 10
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([':seller_id' => $sellerId]);
+            $sellerRecentOrders = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            foreach ($sellerRecentOrders as $row) {
+                $oStatus = strtolower(trim((string)($row['order_status'] ?? '')));
+                $payStatus = strtolower(trim((string)($row['payment_status'] ?? '')));
+                if (in_array($oStatus, ['new', 'pending', 'awaiting_payment', 'processing'], true)) {
+                    $sellerDashboardStats['new_orders']++;
+                }
+                if (in_array($payStatus, ['paid', 'captured', 'completed', 'success'], true)) {
+                    $sellerDashboardStats['paid_orders']++;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('member index seller recent orders load failed: ' . $e->getMessage());
+    }
+
+    try {
+        if (bv_member_sd_table_exists($pdo, 'order_refunds') && bv_member_sd_table_exists($pdo, 'order_refund_items') && bv_member_sd_table_exists($pdo, 'order_items') && bv_member_sd_table_exists($pdo, 'listings')) {
+            $sql = "
+                SELECT
+                    r.id AS refund_id,
+                    MAX(COALESCE(r.refund_code, CONCAT('RF-', r.id))) AS refund_code,
+                    MAX(COALESCE(r.order_id, o.id)) AS order_id,
+                    MAX(COALESCE(o.order_number, o.order_code, CONCAT('ORD-', o.id))) AS order_code,
+                    MAX(COALESCE(r.requested_at, r.created_at)) AS requested_at,
+                    MAX(COALESCE(r.approved_at, r.processed_at, r.updated_at)) AS approved_at,
+                    MAX(COALESCE(r.status, 'pending')) AS refund_status
+                FROM order_refunds r
+                INNER JOIN order_refund_items ri ON ri.refund_id = r.id
+                INNER JOIN order_items oi ON oi.id = ri.order_item_id
+                INNER JOIN listings l ON l.id = oi.listing_id
+                LEFT JOIN orders o ON o.id = oi.order_id
+                WHERE l.seller_id = :seller_id
+                GROUP BY r.id
+                ORDER BY MAX(COALESCE(r.requested_at, r.created_at, r.updated_at)) DESC, r.id DESC
+                LIMIT 10
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([':seller_id' => $sellerId]);
+            $sellerRecentRefunds = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            foreach ($sellerRecentRefunds as $row) {
+                $rStatus = strtolower(trim((string)($row['refund_status'] ?? '')));
+                if (in_array($rStatus, ['pending', 'requested', 'submitted', 'open'], true)) {
+                    $sellerDashboardStats['refund_pending']++;
+                } else {
+                    $sellerDashboardStats['refund_processed']++;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('member index seller refunds load failed: ' . $e->getMessage());
+    }
+
+    try {
+        if (bv_member_sd_table_exists($pdo, 'listing_offers')) {
+            $sql = "
+                SELECT
+                    o.id AS offer_id,
+                    o.listing_id,
+                    MAX(COALESCE(o.offer_code, CONCAT('OFF-', o.id))) AS offer_code,
+                    MAX(COALESCE(o.latest_offer_price, o.offer_price, o.agreed_price, 0)) AS offer_price,
+                    MAX(COALESCE(o.currency, 'USD')) AS currency,
+                    MAX(COALESCE(o.status, 'open')) AS offer_status,
+                    MAX(COALESCE(u.display_name, u.first_name, u.email, 'Buyer')) AS buyer_name,
+                    MAX(COALESCE(l.title, CONCAT('Listing #', o.listing_id))) AS listing_title,
+                    MAX(COALESCE(o.updated_at, o.created_at)) AS updated_at
+                FROM listing_offers o
+                LEFT JOIN listings l ON l.id = o.listing_id
+                LEFT JOIN users u ON u.id = o.buyer_user_id
+                WHERE o.seller_user_id = :seller_id
+                GROUP BY o.id, o.listing_id
+                ORDER BY MAX(COALESCE(o.updated_at, o.created_at)) DESC, o.id DESC
+                LIMIT 10
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([':seller_id' => $sellerId]);
+            $sellerRecentOfferThreads = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            foreach ($sellerRecentOfferThreads as $row) {
+                $status = strtolower(trim((string)($row['offer_status'] ?? '')));
+                if (in_array($status, ['open', 'seller_accepted', 'buyer_checkout_ready'], true)) {
+                    $sellerDashboardStats['open_offers']++;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('member index seller offers dashboard load failed: ' . $e->getMessage());
+    }
+
+    try {
+        if (bv_member_sd_table_exists($pdo, 'orders') && bv_member_sd_table_exists($pdo, 'order_items') && bv_member_sd_table_exists($pdo, 'listings')) {
+            $sql = "
+                SELECT
+                    DATE_FORMAT(COALESCE(o.paid_at, o.updated_at, o.created_at), '%Y-%m') AS sales_month,
+                    COUNT(DISTINCT o.id) AS orders_count,
+                    SUM(COALESCE(oi.total_price, oi.line_total, oi.subtotal, (COALESCE(oi.price, oi.unit_price, 0) * COALESCE(oi.quantity, oi.qty, 1)))) AS gross_sales,
+                    MAX(COALESCE(o.currency, oi.currency, 'USD')) AS currency
+                FROM orders o
+                INNER JOIN order_items oi ON oi.order_id = o.id
+                INNER JOIN listings l ON l.id = oi.listing_id
+                WHERE l.seller_id = :seller_id
+                  AND LOWER(COALESCE(o.status, '')) IN ('paid','processing','confirmed','packing','shipped','completed','refunded')
+                GROUP BY DATE_FORMAT(COALESCE(o.paid_at, o.updated_at, o.created_at), '%Y-%m')
+                ORDER BY sales_month DESC
+                LIMIT 6
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([':seller_id' => $sellerId]);
+            $sellerSalesMonthly = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if ($sellerSalesMonthly) {
+                $first = $sellerSalesMonthly[0];
+                $sellerDashboardStats['this_month_sales'] = (float)($first['gross_sales'] ?? 0);
+                $sellerDashboardStats['currency'] = (string)($first['currency'] ?? 'USD');
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('member index seller sales monthly load failed: ' . $e->getMessage());
+    }
+}
+
 $profileRequiredFields = [
     'phone',
     'address_line1',
@@ -585,7 +881,7 @@ $buyerFullAddress = $buyerFullAddressParts ? implode(', ', $buyerFullAddressPart
 bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dashboard.');
 ?>
 <style>
-.member-wrap{max-width:1240px;margin:0 auto;padding:34px 16px 52px}.member-shell{display:grid;gap:18px}.panel{border:1px solid rgba(229,201,138,.14);border-radius:24px;background:linear-gradient(180deg,rgba(12,28,22,.96),rgba(10,20,16,.98));box-shadow:0 16px 44px rgba(0,0,0,.24)}.panel-body{padding:22px}.hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}.hero h1{margin:0 0 8px;font-size:36px;line-height:1.08;color:#f3efe6}.hero p{margin:0;color:#a8b6ae;max-width:780px;line-height:1.75}.actions{display:flex;gap:10px;flex-wrap:wrap}.btn,.btn-outline,.btn-soft{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border-radius:14px;font-weight:800;text-decoration:none;transition:.18s ease;border:1px solid transparent}.btn{background:#d8b56b;color:#182018}.btn-outline{background:transparent;color:#e7ddca;border-color:rgba(229,201,138,.34)}.btn-soft{background:rgba(255,255,255,.05);color:#e7ddca;border-color:rgba(255,255,255,.08)}.btn:hover,.btn-outline:hover,.btn-soft:hover{transform:translateY(-1px)}.grid-2{display:grid;grid-template-columns:1.15fr .85fr;gap:18px}.flash{padding:14px 16px;border-radius:16px;font-size:14px;line-height:1.6}.flash-success{background:rgba(64,166,103,.16);border:1px solid rgba(64,166,103,.28);color:#c7f0d5}.flash-error{background:rgba(214,92,92,.16);border:1px solid rgba(214,92,92,.28);color:#ffd5d5}.eyebrow{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;background:rgba(216,181,107,.14);color:#f7dfae;border:1px solid rgba(216,181,107,.26);margin-bottom:12px}.stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.stat-card strong{display:block;font-size:30px;color:#f5ebd9;margin-bottom:6px}.stat-card span{display:block;color:#9fb0a7;font-size:13px}.card-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.mini-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.mini-card h3{margin:0 0 10px;font-size:20px;color:#f3efe6}.mini-card p{margin:0;color:#a8b6ae;line-height:1.7}.status-pill{display:inline-flex;align-items:center;padding:7px 11px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.08);color:#fff}.status-pill.green{background:rgba(72,187,120,.16);color:#c9f5d7;border-color:rgba(72,187,120,.26)}.status-pill.gold{background:rgba(216,181,107,.16);color:#f8dfaa;border-color:rgba(216,181,107,.25)}.status-pill.blue{background:rgba(93,129,232,.18);color:#d6e1ff;border-color:rgba(93,129,232,.24)}.status-pill.gray{background:rgba(255,255,255,.08);color:#dbe3df}.list{display:grid;gap:10px}.list-item{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:14px 0;border-bottom:1px solid rgba(255,255,255,.08)}.list-item:last-child{border-bottom:none;padding-bottom:0}.list-item:first-child{padding-top:0}.muted{color:#98a89f}.empty{padding:18px;border-radius:18px;border:1px dashed rgba(229,201,138,.24);background:rgba(255,255,255,.02);color:#aab5af}.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.meta span{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);font-size:12px;color:#dbe2da}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.detail-box{padding:16px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.detail-box strong{display:block;color:#f3efe6;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}.detail-box div{color:#dce5de;line-height:1.7;word-break:break-word}.progress-line{height:10px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:12px}.progress-fill{height:100%;background:linear-gradient(90deg,#d8b56b,#f0d89f)}.offer-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}.offer-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.offer-card strong{display:block;font-size:30px;color:#f5ebd9;margin-bottom:6px}.offer-card span{display:block;color:#9fb0a7;font-size:13px}@media (max-width:980px){.grid-2,.card-grid,.stat-grid,.detail-grid,.offer-grid{grid-template-columns:1fr 1fr}}@media (max-width:720px){.member-wrap{padding:24px 14px 42px}.hero h1{font-size:30px}.grid-2,.card-grid,.stat-grid,.detail-grid,.offer-grid{grid-template-columns:1fr}}
+.member-wrap{max-width:1240px;margin:0 auto;padding:34px 16px 52px}.member-shell{display:grid;gap:18px}.panel{border:1px solid rgba(229,201,138,.14);border-radius:24px;background:linear-gradient(180deg,rgba(12,28,22,.96),rgba(10,20,16,.98));box-shadow:0 16px 44px rgba(0,0,0,.24)}.panel-body{padding:22px}.hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}.hero h1{margin:0 0 8px;font-size:36px;line-height:1.08;color:#f3efe6}.hero p{margin:0;color:#a8b6ae;max-width:780px;line-height:1.75}.actions{display:flex;gap:10px;flex-wrap:wrap}.btn,.btn-outline,.btn-soft{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border-radius:14px;font-weight:800;text-decoration:none;transition:.18s ease;border:1px solid transparent}.btn{background:#d8b56b;color:#182018}.btn-outline{background:transparent;color:#e7ddca;border-color:rgba(229,201,138,.34)}.btn-soft{background:rgba(255,255,255,.05);color:#e7ddca;border-color:rgba(255,255,255,.08)}.btn:hover,.btn-outline:hover,.btn-soft:hover{transform:translateY(-1px)}.grid-2{display:grid;grid-template-columns:1.15fr .85fr;gap:18px}.flash{padding:14px 16px;border-radius:16px;font-size:14px;line-height:1.6}.flash-success{background:rgba(64,166,103,.16);border:1px solid rgba(64,166,103,.28);color:#c7f0d5}.flash-error{background:rgba(214,92,92,.16);border:1px solid rgba(214,92,92,.28);color:#ffd5d5}.eyebrow{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;background:rgba(216,181,107,.14);color:#f7dfae;border:1px solid rgba(216,181,107,.26);margin-bottom:12px}.stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.stat-card strong{display:block;font-size:30px;color:#f5ebd9;margin-bottom:6px}.stat-card span{display:block;color:#9fb0a7;font-size:13px}.card-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.mini-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.mini-card h3{margin:0 0 10px;font-size:20px;color:#f3efe6}.mini-card p{margin:0;color:#a8b6ae;line-height:1.7}.status-pill{display:inline-flex;align-items:center;padding:7px 11px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.08);color:#fff}.status-pill.green{background:rgba(72,187,120,.16);color:#c9f5d7;border-color:rgba(72,187,120,.26)}.status-pill.gold{background:rgba(216,181,107,.16);color:#f8dfaa;border-color:rgba(216,181,107,.25)}.status-pill.blue{background:rgba(93,129,232,.18);color:#d6e1ff;border-color:rgba(93,129,232,.24)}.status-pill.gray{background:rgba(255,255,255,.08);color:#dbe3df}.list{display:grid;gap:10px}.list-item{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:14px 0;border-bottom:1px solid rgba(255,255,255,.08)}.list-item:last-child{border-bottom:none;padding-bottom:0}.list-item:first-child{padding-top:0}.muted{color:#98a89f}.empty{padding:18px;border-radius:18px;border:1px dashed rgba(229,201,138,.24);background:rgba(255,255,255,.02);color:#aab5af}.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.meta span{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);font-size:12px;color:#dbe2da}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.detail-box{padding:16px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.detail-box strong{display:block;color:#f3efe6;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}.detail-box div{color:#dce5de;line-height:1.7;word-break:break-word}.progress-line{height:10px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:12px}.progress-fill{height:100%;background:linear-gradient(90deg,#d8b56b,#f0d89f)}.offer-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}.offer-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.offer-card strong{display:block;font-size:30px;color:#f5ebd9;margin-bottom:6px}.offer-card span{display:block;color:#9fb0a7;font-size:13px}.table-wrap{width:100%;overflow:auto;border:1px solid rgba(255,255,255,.08);border-radius:16px}.data-table{width:100%;border-collapse:collapse;min-width:760px}.data-table th,.data-table td{padding:12px 12px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;font-size:13px;color:#dce5de;vertical-align:top}.data-table th{color:#f3efe6;font-size:12px;text-transform:uppercase;letter-spacing:.06em;background:rgba(255,255,255,.04)}.data-table tr:last-child td{border-bottom:none}.seller-kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:14px}@media (max-width:1200px){.seller-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (max-width:980px){.grid-2,.card-grid,.stat-grid,.detail-grid,.offer-grid,.seller-kpi-grid{grid-template-columns:1fr 1fr}}@media (max-width:720px){.member-wrap{padding:24px 14px 42px}.hero h1{font-size:30px}.grid-2,.card-grid,.stat-grid,.detail-grid,.offer-grid,.seller-kpi-grid{grid-template-columns:1fr}}
 </style>
 
 <div class="member-wrap">
@@ -976,6 +1272,137 @@ bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dash
     </section>
 
     <?php if ($isSellerApproved): ?>
+      <section class="panel">
+        <div class="panel-body">
+          <div class="hero" style="margin-bottom:14px;">
+            <div>
+              <h1 style="font-size:24px;margin-bottom:6px;">Seller Control Center</h1>
+              <p>Customer orders, refund requests, offer threads, and monthly sales in one seller-approved workspace.</p>
+            </div>
+            <div class="actions">
+              <a class="btn-outline" href="<?= bv_member_e(bv_member_sd_existing_page(['/seller/orders.php', '/member/order_view.php'])) ?>">Orders</a>
+              <a class="btn-outline" href="<?= bv_member_e(bv_member_sd_existing_page(['/seller/refunds.php'])) ?>">Refunds</a>
+              <a class="btn-soft" href="<?= bv_member_e(bv_member_sd_existing_page(['/seller/offers.php', '/offer.php'])) ?>">Offers</a>
+            </div>
+          </div>
+
+          <div class="seller-kpi-grid">
+            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['new_orders'] ?></strong><span>New Orders</span></div>
+            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['paid_orders'] ?></strong><span>Paid Orders</span></div>
+            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['refund_pending'] ?></strong><span>Refund Pending</span></div>
+            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['refund_processed'] ?></strong><span>Refund Processed</span></div>
+            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['open_offers'] ?></strong><span>Open Offers</span></div>
+            <div class="stat-card"><strong><?= bv_member_e(bv_member_sd_money((float)$sellerDashboardStats['this_month_sales'], (string)$sellerDashboardStats['currency'])) ?></strong><span>This Month Sales</span></div>
+          </div>
+
+          <div class="grid-2">
+            <div class="mini-card">
+              <h3>Recent Orders</h3>
+              <?php if (!$sellerRecentOrders): ?>
+                <div class="empty">No seller orders found yet.</div>
+              <?php else: ?>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead><tr><th>Order</th><th>Buyer</th><th>Listing</th><th>Qty</th><th>Total</th><th>Status</th><th>Payment</th><th>Action</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($sellerRecentOrders as $row): ?>
+                      <?php [$orderLabel,$orderClass]=bv_member_sd_status_badge((string)($row['order_status'] ?? '')); [$paymentLabel,$paymentClass]=bv_member_sd_status_badge((string)($row['payment_status'] ?? '')); $orderId=(int)($row['order_id'] ?? 0); ?>
+                      <tr>
+                        <td><?= bv_member_e((string)($row['order_code'] ?? ('ORD-' . $orderId))) ?></td>
+                        <td><?= bv_member_e((string)($row['buyer_name'] ?? 'Buyer')) ?></td>
+                        <td><?= bv_member_e((string)($row['listing_title'] ?? '-')) ?></td>
+                        <td><?= (int)($row['qty'] ?? 0) ?></td>
+                        <td><?= bv_member_e(bv_member_sd_money((float)($row['total'] ?? 0), (string)($row['currency'] ?? 'USD'))) ?></td>
+                        <td><span class="status-pill <?= $orderClass ?>"><?= bv_member_e($orderLabel) ?></span></td>
+                        <td><span class="status-pill <?= $paymentClass ?>"><?= bv_member_e($paymentLabel) ?></span></td>
+                        <td><a class="btn-soft" href="<?= bv_member_e(bv_member_sd_url($orderPage, ['id' => $orderId])) ?>">View</a></td>
+                      </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                  </table>
+                </div>
+              <?php endif; ?>
+            </div>
+
+            <div class="mini-card">
+              <h3>Refund Requests</h3>
+              <?php if (!$sellerRecentRefunds): ?>
+                <div class="empty">No refund requests found.</div>
+              <?php else: ?>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead><tr><th>Refund</th><th>Order</th><th>Requested</th><th>Approved</th><th>Status</th><th>Action</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($sellerRecentRefunds as $row): ?>
+                      <?php [$refundLabel,$refundClass]=bv_member_sd_status_badge((string)($row['refund_status'] ?? '')); $refundId=(int)($row['refund_id'] ?? 0); $refundOrderId=(int)($row['order_id'] ?? 0); ?>
+                      <tr>
+                        <td><?= bv_member_e((string)($row['refund_code'] ?? ('RF-' . $refundId))) ?></td>
+                        <td><?= bv_member_e((string)($row['order_code'] ?? ('ORD-' . $refundOrderId))) ?></td>
+                        <td><?= !empty($row['requested_at']) ? bv_member_e(date('Y-m-d H:i', strtotime((string)$row['requested_at']) ?: time())) : '-' ?></td>
+                        <td><?= !empty($row['approved_at']) ? bv_member_e(date('Y-m-d H:i', strtotime((string)$row['approved_at']) ?: time())) : '-' ?></td>
+                        <td><span class="status-pill <?= $refundClass ?>"><?= bv_member_e($refundLabel) ?></span></td>
+                        <td><a class="btn-soft" href="<?= bv_member_e(bv_member_sd_url($refundPage, ['id' => $refundId])) ?>">View</a></td>
+                      </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                  </table>
+                </div>
+              <?php endif; ?>
+            </div>
+          </div>
+
+          <div class="grid-2" style="margin-top:14px;">
+            <div class="mini-card">
+              <h3>Offer Messages</h3>
+              <?php if (!$sellerRecentOfferThreads): ?>
+                <div class="empty">No offers found yet.</div>
+              <?php else: ?>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead><tr><th>Offer</th><th>Buyer</th><th>Listing</th><th>Offer Price</th><th>Status</th><th>Action</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($sellerRecentOfferThreads as $row): ?>
+                      <?php [$offerStatusLabel,$offerStatusClass]=bv_member_sd_status_badge((string)($row['offer_status'] ?? '')); $offerId=(int)($row['offer_id'] ?? 0); ?>
+                      <tr>
+                        <td><?= bv_member_e((string)($row['offer_code'] ?? ('OFF-' . $offerId))) ?></td>
+                        <td><?= bv_member_e((string)($row['buyer_name'] ?? 'Buyer')) ?></td>
+                        <td><?= bv_member_e((string)($row['listing_title'] ?? '-')) ?></td>
+                        <td><?= bv_member_e(bv_member_sd_money((float)($row['offer_price'] ?? 0), (string)($row['currency'] ?? 'USD'))) ?></td>
+                        <td><span class="status-pill <?= $offerStatusClass ?>"><?= bv_member_e($offerStatusLabel) ?></span></td>
+                        <td><a class="btn-soft" href="<?= bv_member_e(bv_member_sd_url($offerPage, ['id' => $offerId])) ?>">Open</a></td>
+                      </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                  </table>
+                </div>
+              <?php endif; ?>
+            </div>
+
+            <div class="mini-card">
+              <h3>Sales Summary by Month</h3>
+              <?php if (!$sellerSalesMonthly): ?>
+                <div class="empty">No sales summary data yet.</div>
+              <?php else: ?>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead><tr><th>Month</th><th>Orders</th><th>Gross Sales</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($sellerSalesMonthly as $row): ?>
+                      <tr>
+                        <td><?= bv_member_e((string)($row['sales_month'] ?? '-')) ?></td>
+                        <td><?= (int)($row['orders_count'] ?? 0) ?></td>
+                        <td><?= bv_member_e(bv_member_sd_money((float)($row['gross_sales'] ?? 0), (string)($row['currency'] ?? $sellerDashboardStats['currency']))) ?></td>
+                      </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                  </table>
+                </div>
+              <?php endif; ?>
+            </div>
+          </div>
+        </div>
+      </section>
+	
       <section class="panel">
         <div class="panel-body">
           <div class="hero" style="margin-bottom:14px;">
