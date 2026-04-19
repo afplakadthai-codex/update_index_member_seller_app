@@ -349,7 +349,8 @@ if (!function_exists('seller_orders_existing_page')) {
 $orderCols = seller_orders_table_columns($db, 'orders');
 $orderItemCols = seller_orders_table_columns($db, 'order_items');
 $listingCols = seller_orders_table_columns($db, 'listings');
-$userCols = seller_orders_table_columns($db, 'users');
+$hasUsersTable = seller_orders_table_exists($db, 'users');
+$userCols = $hasUsersTable ? seller_orders_table_columns($db, 'users') : [];
 
 
 $statusOptions = [
@@ -405,10 +406,10 @@ foreach (['buyer_name', 'customer_name', 'ship_name'] as $col) {
         $buyerNameChain[] = "NULLIF(TRIM(o.`{$col}`), '')";
     }
 }
-if (isset($userCols['first_name']) && isset($userCols['last_name'])) {
+if ($hasUsersTable && isset($userCols['first_name']) && isset($userCols['last_name'])) {
     $buyerNameChain[] = "NULLIF(TRIM(CONCAT(COALESCE(u.`first_name`, ''), ' ', COALESCE(u.`last_name`, ''))), '')";
 }
-if (isset($userCols['email'])) {
+if ($hasUsersTable && isset($userCols['email'])) {
     $buyerNameChain[] = "NULLIF(TRIM(u.`email`), '')";
 }
 foreach (['buyer_email', 'ship_email'] as $col) {
@@ -457,9 +458,9 @@ foreach (['buyer_user_id', 'member_id', 'user_id'] as $candidateCol) {
         break;
     }
 }
-$buyerJoinSql = $buyerJoinKey !== null
+$buyerJoinSql = ($buyerJoinKey !== null && $hasUsersTable)
     ? "LEFT JOIN `users` u ON u.`id` = o.`{$buyerJoinKey}`"
-    : "LEFT JOIN `users` u ON 1=0";
+    : '';
 
 if ($statusFilter !== 'all') {
     $params[':status_filter'] = $statusFilter;
