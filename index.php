@@ -851,7 +851,7 @@ if ($isSellerApproved && $userId > 0) {
                  LEFT JOIN order_items oi ON oi.id = ri.order_item_id
                 LEFT JOIN listings l ON l.id = COALESCE(ri.listing_id, oi.listing_id)
                 LEFT JOIN orders o ON o.id = oi.order_id
-                WHERE l.seller_id = :seller_id
+                 WHERE (" . implode(' OR ', $refundOwnershipWhere) . ")
                 GROUP BY r.id
               ORDER BY MAX(" . $requestedAtExpr . ") DESC, r.id DESC 
                 LIMIT 10
