@@ -208,6 +208,18 @@ if (!function_exists('bv_member_sd_money')) {
     }
 }
 
+if (!function_exists('bv_member_sd_pick_expr')) {
+    function bv_member_sd_pick_expr(array $candidates, string $fallback): string
+    {
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                return $candidate;
+            }
+        }
+        return $fallback;
+    }
+}
+
 if (!function_exists('bv_member_sd_status_badge')) {
     function bv_member_sd_status_badge(string $status): array
     {
@@ -696,25 +708,83 @@ if ($isSellerApproved && $userId > 0) {
 
     try {
         if (bv_member_sd_table_exists($pdo, 'orders') && bv_member_sd_table_exists($pdo, 'order_items') && bv_member_sd_table_exists($pdo, 'listings')) {
+            $orderCols = bv_member_sd_columns($pdo, 'orders');
+            $orderItemCols = bv_member_sd_columns($pdo, 'order_items');
+            $listingColsForOrders = bv_member_sd_columns($pdo, 'listings');
+            $userCols = bv_member_sd_table_exists($pdo, 'users') ? bv_member_sd_columns($pdo, 'users') : [];
+
+            $orderCodeExpr = !empty($orderCols['order_code']) ? 'o.order_code' : ( !empty($orderCols['id']) ? "CONCAT('ORD-', o.id)" : "'-'");
+            $buyerNameCandidates = [];
+            if (!empty($orderCols['buyer_name'])) $buyerNameCandidates[] = 'o.buyer_name';
+            if (!empty($orderCols['customer_name'])) $buyerNameCandidates[] = 'o.customer_name';
+            if (!empty($userCols['display_name'])) $buyerNameCandidates[] = 'u.display_name';
+            if (!empty($userCols['first_name'])) $buyerNameCandidates[] = 'u.first_name';
+            if (!empty($userCols['email'])) $buyerNameCandidates[] = 'u.email';
+            $buyerNameExpr = bv_member_sd_pick_expr($buyerNameCandidates, "'Buyer'");
+
+            $qtyCandidates = [];
+            if (!empty($orderItemCols['quantity'])) $qtyCandidates[] = 'oi.quantity';
+            if (!empty($orderItemCols['qty'])) $qtyCandidates[] = 'oi.qty';
+            $qtyExpr = bv_member_sd_pick_expr($qtyCandidates, '1');
+
+            $lineTotalCandidates = [];
+            if (!empty($orderItemCols['total_price'])) $lineTotalCandidates[] = 'oi.total_price';
+            if (!empty($orderItemCols['line_total'])) $lineTotalCandidates[] = 'oi.line_total';
+            if (!empty($orderItemCols['subtotal'])) $lineTotalCandidates[] = 'oi.subtotal';
+            $unitCandidates = [];
+            if (!empty($orderItemCols['price'])) $unitCandidates[] = 'oi.price';
+            if (!empty($orderItemCols['unit_price'])) $unitCandidates[] = 'oi.unit_price';
+            if ($unitCandidates) {
+                $lineTotalCandidates[] = '(COALESCE(' . implode(', ', $unitCandidates) . ', 0) * COALESCE(' . $qtyExpr . ', 1))';
+            }
+            $lineTotalExpr = bv_member_sd_pick_expr($lineTotalCandidates, '0');
+
+            $orderStatusExpr = !empty($orderCols['status']) ? 'o.status' : "'pending'";
+            $paymentStatusExpr = !empty($orderCols['payment_status']) ? 'o.payment_status' : ( !empty($orderCols['payment_state']) ? 'o.payment_state' : "'pending'");
+            $currencyExpr = !empty($orderCols['currency']) ? 'o.currency' : ( !empty($orderItemCols['currency']) ? 'oi.currency' : "'USD'");
+            $createdAtExpr = !empty($orderCols['created_at']) ? 'o.created_at' : ( !empty($orderCols['updated_at']) ? 'o.updated_at' : 'NOW()');
+            $listingTitleExpr = (!empty($listingColsForOrders['title']) ? 'l.title' : null);
+            if ($listingTitleExpr === null) {
+                $listingTitleExpr = (!empty($orderItemCols['title_snapshot']) ? 'oi.title_snapshot' : "CONCAT('Listing #', oi.listing_id)");
+            }
+
+            $buyerJoinExpr = 'o.user_id';
+            if (!empty($orderCols['buyer_user_id'])) {
+                $buyerJoinExpr = 'o.buyer_user_id';
+            } elseif (!empty($orderCols['member_id'])) {
+                $buyerJoinExpr = 'o.member_id';
+            }
+
+            $sellerOwnerWhere = [];
+            if (!empty($listingColsForOrders['seller_id'])) {
+                $sellerOwnerWhere[] = 'l.seller_id = :seller_id';
+            }
+            if (!empty($orderItemCols['seller_id'])) {
+                $sellerOwnerWhere[] = 'oi.seller_id = :seller_id';
+            }
+            if (!$sellerOwnerWhere) {
+                $sellerOwnerWhere[] = 'l.seller_id = :seller_id';
+            }
+
             $sql = "
                 SELECT
                     o.id AS order_id,
-                    MAX(COALESCE(o.order_number, o.order_code, CONCAT('ORD-', o.id))) AS order_code,
-                    MAX(COALESCE(o.buyer_name, o.customer_name, u.display_name, u.first_name, u.email, 'Buyer')) AS buyer_name,
-                    MAX(COALESCE(l.title, CONCAT('Listing #', oi.listing_id))) AS listing_title,
-                    SUM(COALESCE(oi.quantity, oi.qty, 1)) AS qty,
-                    SUM(COALESCE(oi.total_price, oi.line_total, oi.subtotal, (COALESCE(oi.price, oi.unit_price, 0) * COALESCE(oi.quantity, oi.qty, 1)))) AS total,
-                    MAX(COALESCE(o.status, 'pending')) AS order_status,
-                    MAX(COALESCE(o.payment_status, o.payment_state, 'pending')) AS payment_status,
-                    MAX(COALESCE(o.currency, oi.currency, 'USD')) AS currency,
-                    MAX(COALESCE(o.created_at, o.updated_at)) AS created_at
+                    MAX(" . $orderCodeExpr . ") AS order_code,
+                    MAX(COALESCE(" . $buyerNameExpr . ", 'Buyer')) AS buyer_name,
+                    MAX(COALESCE(" . $listingTitleExpr . ", CONCAT('Listing #', oi.listing_id))) AS listing_title,
+                    SUM(COALESCE(" . $qtyExpr . ", 1)) AS qty,
+                    SUM(COALESCE(" . $lineTotalExpr . ", 0)) AS total,
+                    MAX(COALESCE(" . $orderStatusExpr . ", 'pending')) AS order_status,
+                    MAX(COALESCE(" . $paymentStatusExpr . ", 'pending')) AS payment_status,
+                    MAX(COALESCE(" . $currencyExpr . ", 'USD')) AS currency,
+                    MAX(" . $createdAtExpr . ") AS created_at
                 FROM orders o
                 INNER JOIN order_items oi ON oi.order_id = o.id
                 INNER JOIN listings l ON l.id = oi.listing_id
-                LEFT JOIN users u ON u.id = COALESCE(o.buyer_user_id, o.user_id, o.member_id)
-                WHERE l.seller_id = :seller_id
+                 LEFT JOIN users u ON u.id = " . $buyerJoinExpr . "
+                WHERE (" . implode(' OR ', $sellerOwnerWhere) . ")
                 GROUP BY o.id
-                ORDER BY MAX(COALESCE(o.created_at, o.updated_at)) DESC, o.id DESC
+               ORDER BY MAX(" . $createdAtExpr . ") DESC, o.id DESC
                 LIMIT 10
             ";
             $stmt = $pdo->prepare($sql);
@@ -738,26 +808,52 @@ if ($isSellerApproved && $userId > 0) {
 
     try {
         if (bv_member_sd_table_exists($pdo, 'order_refunds') && bv_member_sd_table_exists($pdo, 'order_refund_items') && bv_member_sd_table_exists($pdo, 'order_items') && bv_member_sd_table_exists($pdo, 'listings')) {
-            $sql = "
+             $refundCols = bv_member_sd_columns($pdo, 'order_refunds');
+            $refundItemCols = bv_member_sd_columns($pdo, 'order_refund_items');
+            $orderItemCols = bv_member_sd_columns($pdo, 'order_items');
+            $orderCols = bv_member_sd_columns($pdo, 'orders');
+            $listingColsForRefunds = bv_member_sd_columns($pdo, 'listings');
+
+            $refundCodeExpr = !empty($refundCols['refund_code']) ? 'r.refund_code' : "CONCAT('RF-', r.id)";
+            $orderCodeExpr = !empty($orderCols['order_code']) ? 'o.order_code' : "CONCAT('ORD-', o.id)";
+            $requestedAtExpr = !empty($refundCols['requested_at']) ? 'r.requested_at' : ( !empty($refundCols['created_at']) ? 'r.created_at' : 'NOW()');
+            $approvedAtExpr = !empty($refundCols['approved_at']) ? 'r.approved_at' : ( !empty($refundCols['processing_started_at']) ? 'r.processing_started_at' : ( !empty($refundCols['updated_at']) ? 'r.updated_at' : 'NULL'));
+            $refundStatusExpr = !empty($refundCols['status']) ? 'r.status' : "'pending'";
+            $requestedAmountExpr = !empty($refundCols['requested_refund_amount']) ? 'r.requested_refund_amount' : ( !empty($refundCols['requested_amount']) ? 'r.requested_amount' : '0');
+            $approvedAmountExpr = !empty($refundCols['approved_refund_amount']) ? 'r.approved_refund_amount' : ( !empty($refundCols['approved_amount']) ? 'r.approved_amount' : '0');
+            $refundCurrencyExpr = !empty($refundCols['currency']) ? 'r.currency' : ( !empty($orderCols['currency']) ? 'o.currency' : "'USD'");
+
+            $refundOwnershipWhere = [];
+            if (!empty($orderItemCols['seller_id'])) {
+                $refundOwnershipWhere[] = 'oi.seller_id = :seller_id';
+            }
+            if (!empty($listingColsForRefunds['seller_id'])) {
+                $refundOwnershipWhere[] = 'l.seller_id = :seller_id';
+            }
+            if (!$refundOwnershipWhere) {
+                $refundOwnershipWhere[] = 'l.seller_id = :seller_id';
+            }
+           
+			$sql = "
                 SELECT
                     r.id AS refund_id,
-                    MAX(COALESCE(r.refund_code, CONCAT('RF-', r.id))) AS refund_code,
+                     MAX(" . $refundCodeExpr . ") AS refund_code,
                     MAX(COALESCE(r.order_id, o.id)) AS order_id,
-                    MAX(COALESCE(o.order_number, o.order_code, CONCAT('ORD-', o.id))) AS order_code,
-                    MAX(COALESCE(r.requested_at, r.created_at)) AS requested_at,
-                    MAX(COALESCE(r.approved_at, r.processed_at, r.updated_at)) AS approved_at,
-                    MAX(COALESCE(r.status, 'pending')) AS refund_status,
-                    MAX(COALESCE(r.requested_refund_amount, r.requested_amount, 0)) AS requested_refund_amount,      
-                    MAX(COALESCE(r.approved_refund_amount, r.approved_amount, 0)) AS approved_refund_amount,
-                    MAX(COALESCE(r.currency, o.currency, 'USD')) AS currency
+                    MAX(" . $orderCodeExpr . ") AS order_code,
+                    MAX(" . $requestedAtExpr . ") AS requested_at,
+                    MAX(" . $approvedAtExpr . ") AS approved_at,
+                    MAX(COALESCE(" . $refundStatusExpr . ", 'pending')) AS refund_status,
+                    MAX(COALESCE(" . $requestedAmountExpr . ", 0)) AS requested_refund_amount,
+                    MAX(COALESCE(" . $approvedAmountExpr . ", 0)) AS approved_refund_amount,
+                    MAX(COALESCE(" . $refundCurrencyExpr . ", 'USD')) AS currency                  
                 FROM order_refunds r
                 INNER JOIN order_refund_items ri ON ri.refund_id = r.id
-                INNER JOIN order_items oi ON oi.id = ri.order_item_id
-                INNER JOIN listings l ON l.id = oi.listing_id
+                 LEFT JOIN order_items oi ON oi.id = ri.order_item_id
+                LEFT JOIN listings l ON l.id = COALESCE(ri.listing_id, oi.listing_id)
                 LEFT JOIN orders o ON o.id = oi.order_id
                 WHERE l.seller_id = :seller_id
                 GROUP BY r.id
-                ORDER BY MAX(COALESCE(r.requested_at, r.created_at, r.updated_at)) DESC, r.id DESC
+              ORDER BY MAX(" . $requestedAtExpr . ") DESC, r.id DESC 
                 LIMIT 10
             ";
             $stmt = $pdo->prepare($sql);
@@ -779,23 +875,48 @@ if ($isSellerApproved && $userId > 0) {
 
     try {
         if (bv_member_sd_table_exists($pdo, 'listing_offers')) {
+            $offerCols = bv_member_sd_columns($pdo, 'listing_offers');
+            $listingColsForOffers = bv_member_sd_columns($pdo, 'listings');
+            $userCols = bv_member_sd_table_exists($pdo, 'users') ? bv_member_sd_columns($pdo, 'users') : [];
+            $offerOwnerWhere = [];
+            if (!empty($offerCols['seller_user_id'])) {
+                $offerOwnerWhere[] = 'o.seller_user_id = :seller_id';
+            }
+            if (!empty($listingColsForOffers['seller_id'])) {
+                $offerOwnerWhere[] = 'l.seller_id = :seller_id';
+            }
+            if (!$offerOwnerWhere) {
+                $offerOwnerWhere[] = 'o.seller_user_id = :seller_id';
+            }
+            $offerCodeExpr = !empty($offerCols['offer_code']) ? 'o.offer_code' : "CONCAT('OFF-', o.id)";
+            $offerPriceExpr = !empty($offerCols['latest_offer_price']) ? 'o.latest_offer_price' : ( !empty($offerCols['offer_price']) ? 'o.offer_price' : ( !empty($offerCols['agreed_price']) ? 'o.agreed_price' : '0'));
+            $offerCurrencyExpr = !empty($offerCols['currency']) ? 'o.currency' : "'USD'";
+            $offerStatusExpr = !empty($offerCols['status']) ? 'o.status' : "'open'";
+            $offerUpdatedExpr = !empty($offerCols['updated_at']) ? 'o.updated_at' : ( !empty($offerCols['created_at']) ? 'o.created_at' : 'NOW()');
+
+            $buyerNameCandidates = [];
+            if (!empty($userCols['display_name'])) $buyerNameCandidates[] = 'u.display_name';
+            if (!empty($userCols['first_name'])) $buyerNameCandidates[] = 'u.first_name';
+            if (!empty($userCols['email'])) $buyerNameCandidates[] = 'u.email';
+            $buyerNameExpr = bv_member_sd_pick_expr($buyerNameCandidates, "'Buyer'");
+            $listingTitleExpr = !empty($listingColsForOffers['title']) ? 'l.title' : "CONCAT('Listing #', o.listing_id)";			
             $sql = "
                 SELECT
                     o.id AS offer_id,
                     o.listing_id,
-                    MAX(COALESCE(o.offer_code, CONCAT('OFF-', o.id))) AS offer_code,
-                    MAX(COALESCE(o.latest_offer_price, o.offer_price, o.agreed_price, 0)) AS offer_price,
-                    MAX(COALESCE(o.currency, 'USD')) AS currency,
-                    MAX(COALESCE(o.status, 'open')) AS offer_status,
-                    MAX(COALESCE(u.display_name, u.first_name, u.email, 'Buyer')) AS buyer_name,
-                    MAX(COALESCE(l.title, CONCAT('Listing #', o.listing_id))) AS listing_title,
-                    MAX(COALESCE(o.updated_at, o.created_at)) AS updated_at
+                    MAX(" . $offerCodeExpr . ") AS offer_code,
+                    MAX(COALESCE(" . $offerPriceExpr . ", 0)) AS offer_price,
+                    MAX(COALESCE(" . $offerCurrencyExpr . ", 'USD')) AS currency,
+                    MAX(COALESCE(" . $offerStatusExpr . ", 'open')) AS offer_status,
+                    MAX(COALESCE(" . $buyerNameExpr . ", 'Buyer')) AS buyer_name,
+                    MAX(COALESCE(" . $listingTitleExpr . ", CONCAT('Listing #', o.listing_id))) AS listing_title,
+                    MAX(" . $offerUpdatedExpr . ") AS updated_at 
                 FROM listing_offers o
                 LEFT JOIN listings l ON l.id = o.listing_id
                 LEFT JOIN users u ON u.id = o.buyer_user_id
-                WHERE o.seller_user_id = :seller_id
+               WHERE (" . implode(' OR ', $offerOwnerWhere) . ")
                 GROUP BY o.id, o.listing_id
-                ORDER BY MAX(COALESCE(o.updated_at, o.created_at)) DESC, o.id DESC
+              ORDER BY MAX(" . $offerUpdatedExpr . ") DESC, o.id DESC
                 LIMIT 10
             ";
             $stmt = $pdo->prepare($sql);
@@ -815,18 +936,51 @@ if ($isSellerApproved && $userId > 0) {
 
     try {
         if (bv_member_sd_table_exists($pdo, 'orders') && bv_member_sd_table_exists($pdo, 'order_items') && bv_member_sd_table_exists($pdo, 'listings')) {
+            $orderCols = bv_member_sd_columns($pdo, 'orders');
+            $orderItemCols = bv_member_sd_columns($pdo, 'order_items');
+            $listingColsForSales = bv_member_sd_columns($pdo, 'listings');
+
+            $salesMonthExpr = !empty($orderCols['paid_at']) ? 'o.paid_at' : ( !empty($orderCols['updated_at']) ? 'o.updated_at' : 'o.created_at');
+            $qtyCandidates = [];
+            if (!empty($orderItemCols['quantity'])) $qtyCandidates[] = 'oi.quantity';
+            if (!empty($orderItemCols['qty'])) $qtyCandidates[] = 'oi.qty';
+            $qtyExpr = bv_member_sd_pick_expr($qtyCandidates, '1');
+            $lineTotalCandidates = [];
+            if (!empty($orderItemCols['total_price'])) $lineTotalCandidates[] = 'oi.total_price';
+            if (!empty($orderItemCols['line_total'])) $lineTotalCandidates[] = 'oi.line_total';
+            if (!empty($orderItemCols['subtotal'])) $lineTotalCandidates[] = 'oi.subtotal';
+            $unitCandidates = [];
+            if (!empty($orderItemCols['price'])) $unitCandidates[] = 'oi.price';
+            if (!empty($orderItemCols['unit_price'])) $unitCandidates[] = 'oi.unit_price';
+            if ($unitCandidates) {
+                $lineTotalCandidates[] = '(COALESCE(' . implode(', ', $unitCandidates) . ', 0) * COALESCE(' . $qtyExpr . ', 1))';
+            }
+            $lineTotalExpr = bv_member_sd_pick_expr($lineTotalCandidates, '0');
+            $salesCurrencyExpr = !empty($orderCols['currency']) ? 'o.currency' : ( !empty($orderItemCols['currency']) ? 'oi.currency' : "'USD'");
+
+            $salesOwnerWhere = [];
+            if (!empty($listingColsForSales['seller_id'])) {
+                $salesOwnerWhere[] = 'l.seller_id = :seller_id';
+            }
+            if (!empty($orderItemCols['seller_id'])) {
+                $salesOwnerWhere[] = 'oi.seller_id = :seller_id';
+            }
+            if (!$salesOwnerWhere) {
+                $salesOwnerWhere[] = 'l.seller_id = :seller_id';
+            }
+			
             $sql = "
                 SELECT
-                    DATE_FORMAT(COALESCE(o.paid_at, o.updated_at, o.created_at), '%Y-%m') AS sales_month,
+                    DATE_FORMAT(" . $salesMonthExpr . ", '%Y-%m') AS sales_month,
                     COUNT(DISTINCT o.id) AS orders_count,
-                    SUM(COALESCE(oi.total_price, oi.line_total, oi.subtotal, (COALESCE(oi.price, oi.unit_price, 0) * COALESCE(oi.quantity, oi.qty, 1)))) AS gross_sales,
-                    MAX(COALESCE(o.currency, oi.currency, 'USD')) AS currency
+                   SUM(COALESCE(" . $lineTotalExpr . ", 0)) AS gross_sales,
+                    MAX(COALESCE(" . $salesCurrencyExpr . ", 'USD')) AS currency
                 FROM orders o
                 INNER JOIN order_items oi ON oi.order_id = o.id
                 INNER JOIN listings l ON l.id = oi.listing_id
-                WHERE l.seller_id = :seller_id
+                WHERE (" . implode(' OR ', $salesOwnerWhere) . ")
                   AND LOWER(COALESCE(o.status, '')) IN ('paid','processing','confirmed','packing','shipped','completed','refunded')
-                GROUP BY DATE_FORMAT(COALESCE(o.paid_at, o.updated_at, o.created_at), '%Y-%m')
+               GROUP BY DATE_FORMAT(" . $salesMonthExpr . ", '%Y-%m')
                 ORDER BY sales_month DESC
                 LIMIT 6
             ";
