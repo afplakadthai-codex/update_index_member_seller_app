@@ -724,7 +724,7 @@ if ($isSellerApproved && $userId > 0) {
             foreach ($sellerRecentOrders as $row) {
                 $oStatus = strtolower(trim((string)($row['order_status'] ?? '')));
                 $payStatus = strtolower(trim((string)($row['payment_status'] ?? '')));
-                if (in_array($oStatus, ['new', 'pending', 'awaiting_payment', 'processing'], true)) {
+				if (in_array($oStatus, ['pending', 'pending_payment', 'reserved', 'paid-awaiting-verify'], true)) {
                     $sellerDashboardStats['new_orders']++;
                 }
                 if (in_array($payStatus, ['paid', 'captured', 'completed', 'success'], true)) {
@@ -747,6 +747,9 @@ if ($isSellerApproved && $userId > 0) {
                     MAX(COALESCE(r.requested_at, r.created_at)) AS requested_at,
                     MAX(COALESCE(r.approved_at, r.processed_at, r.updated_at)) AS approved_at,
                     MAX(COALESCE(r.status, 'pending')) AS refund_status
+					MAX(COALESCE(r.requested_refund_amount, r.requested_amount, 0)) AS requested_refund_amount,
+                    MAX(COALESCE(r.approved_refund_amount, r.approved_amount, 0)) AS approved_refund_amount,
+                    MAX(COALESCE(r.currency, o.currency, 'USD')) AS currency,					
                 FROM order_refunds r
                 INNER JOIN order_refund_items ri ON ri.refund_id = r.id
                 INNER JOIN order_items oi ON oi.id = ri.order_item_id
@@ -763,9 +766,10 @@ if ($isSellerApproved && $userId > 0) {
 
             foreach ($sellerRecentRefunds as $row) {
                 $rStatus = strtolower(trim((string)($row['refund_status'] ?? '')));
-                if (in_array($rStatus, ['pending', 'requested', 'submitted', 'open'], true)) {
+				if (in_array($rStatus, ['pending_approval', 'approved', 'processing'], true)) {
                     $sellerDashboardStats['refund_pending']++;
                 } else {
+	               } elseif (in_array($rStatus, ['refunded', 'rejected', 'failed', 'cancelled'], true)) {				
                     $sellerDashboardStats['refund_processed']++;
                 }
             }
@@ -1338,8 +1342,8 @@ bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dash
                       <tr>
                         <td><?= bv_member_e((string)($row['refund_code'] ?? ('RF-' . $refundId))) ?></td>
                         <td><?= bv_member_e((string)($row['order_code'] ?? ('ORD-' . $refundOrderId))) ?></td>
-                        <td><?= !empty($row['requested_at']) ? bv_member_e(date('Y-m-d H:i', strtotime((string)$row['requested_at']) ?: time())) : '-' ?></td>
-                        <td><?= !empty($row['approved_at']) ? bv_member_e(date('Y-m-d H:i', strtotime((string)$row['approved_at']) ?: time())) : '-' ?></td>
+                        <td><?= isset($row['requested_refund_amount']) ? bv_member_e(bv_member_sd_money((float)($row['requested_refund_amount'] ?? 0), (string)($row['currency'] ?? 'USD'))) : '-' ?></td>
+                        <td><?= isset($row['approved_refund_amount']) ? bv_member_e(bv_member_sd_money((float)($row['approved_refund_amount'] ?? 0), (string)($row['currency'] ?? 'USD'))) : '-' ?></td> 
                         <td><span class="status-pill <?= $refundClass ?>"><?= bv_member_e($refundLabel) ?></span></td>
                         <td><a class="btn-soft" href="<?= bv_member_e(bv_member_sd_url($refundPage, ['id' => $refundId])) ?>">View</a></td>
                       </tr>
