@@ -810,17 +810,10 @@ if ($isSellerApproved && $userId > 0) {
             } elseif (!empty($orderCols['member_id'])) {
                 $buyerJoinExpr = 'o.member_id';
             }
-
-            $sellerOwnerWhere = [];
-            if (!empty($listingColsForOrders['seller_id'])) {
-                $sellerOwnerWhere[] = 'l.seller_id = :seller_id';
-            }
-            if (!empty($orderItemCols['seller_id'])) {
-                $sellerOwnerWhere[] = 'oi.seller_id = :seller_id';
-            }
-            if (!$sellerOwnerWhere) {
-                $sellerOwnerWhere[] = 'l.seller_id = :seller_id';
-            }
+           $sellerOwnerWhere = [
+                'oi.seller_id = :seller_id',
+                'l.seller_id = :seller_id',
+            ];
 
             $sql = "
                 SELECT
@@ -882,16 +875,10 @@ if ($isSellerApproved && $userId > 0) {
             $approvedAmountExpr = !empty($refundCols['approved_refund_amount']) ? 'r.approved_refund_amount' : ( !empty($refundCols['approved_amount']) ? 'r.approved_amount' : '0');
             $refundCurrencyExpr = !empty($refundCols['currency']) ? 'r.currency' : ( !empty($orderCols['currency']) ? 'o.currency' : "'USD'");
 
-            $refundOwnershipWhere = [];
-            if (!empty($orderItemCols['seller_id'])) {
-                $refundOwnershipWhere[] = 'oi.seller_id = :seller_id';
-            }
-            if (!empty($listingColsForRefunds['seller_id'])) {
-                $refundOwnershipWhere[] = 'l.seller_id = :seller_id';
-            }
-            if (!$refundOwnershipWhere) {
-                $refundOwnershipWhere[] = 'l.seller_id = :seller_id';
-            }
+             $refundOwnershipWhere = [
+                'oi.seller_id = :seller_id',
+                'l.seller_id = :seller_id',
+            ];         
            
 			$sql = "
                 SELECT
@@ -940,16 +927,10 @@ if ($isSellerApproved && $userId > 0) {
             $offerCols = bv_member_sd_columns($pdo, 'listing_offers');
             $listingColsForOffers = bv_member_sd_columns($pdo, 'listings');
             $userCols = bv_member_sd_table_exists($pdo, 'users') ? bv_member_sd_columns($pdo, 'users') : [];
-            $offerOwnerWhere = [];
-            if (!empty($offerCols['seller_user_id'])) {
-                $offerOwnerWhere[] = 'o.seller_user_id = :seller_id';
-            }
-            if (!empty($listingColsForOffers['seller_id'])) {
-                $offerOwnerWhere[] = 'l.seller_id = :seller_id';
-            }
-            if (!$offerOwnerWhere) {
-                $offerOwnerWhere[] = 'o.seller_user_id = :seller_id';
-            }
+           $offerOwnerWhere = [
+                'o.seller_user_id = :seller_id',
+                'l.seller_id = :seller_id',
+            ];
             $offerCodeExpr = !empty($offerCols['offer_code']) ? 'o.offer_code' : "CONCAT('OFF-', o.id)";
             $offerPriceExpr = !empty($offerCols['latest_offer_price']) ? 'o.latest_offer_price' : ( !empty($offerCols['offer_price']) ? 'o.offer_price' : ( !empty($offerCols['agreed_price']) ? 'o.agreed_price' : '0'));
             $offerCurrencyExpr = !empty($offerCols['currency']) ? 'o.currency' : "'USD'";
@@ -1023,16 +1004,10 @@ if ($isSellerApproved && $userId > 0) {
             $lineTotalExpr = bv_member_sd_pick_expr($lineTotalCandidates, '0');
             $salesCurrencyExpr = !empty($orderCols['currency']) ? 'o.currency' : ( !empty($orderItemCols['currency']) ? 'oi.currency' : "'USD'");
 
-            $salesOwnerWhere = [];
-            if (!empty($listingColsForSales['seller_id'])) {
-                $salesOwnerWhere[] = 'l.seller_id = :seller_id';
-            }
-            if (!empty($orderItemCols['seller_id'])) {
-                $salesOwnerWhere[] = 'oi.seller_id = :seller_id';
-            }
-            if (!$salesOwnerWhere) {
-                $salesOwnerWhere[] = 'l.seller_id = :seller_id';
-            }
+             $salesOwnerWhere = [
+                'oi.seller_id = :seller_id',
+                'l.seller_id = :seller_id',
+            ];
 			
             $sql = "
                 SELECT
@@ -1075,16 +1050,10 @@ if ($isSellerApproved && $userId > 0) {
             $approvedAmountExpr = !empty($refundCols['approved_refund_amount']) ? 'r.approved_refund_amount' : (!empty($refundCols['approved_amount']) ? 'r.approved_amount' : (!empty($refundCols['requested_refund_amount']) ? 'r.requested_refund_amount' : '0'));
             $refundCurrencyExpr = !empty($refundCols['currency']) ? 'r.currency' : "'USD'";
 
-            $refundOwnershipWhere = [];
-            if (!empty($orderItemCols['seller_id'])) {
-                $refundOwnershipWhere[] = 'oi.seller_id = :seller_id';
-            }
-            if (!empty($listingColsForRefunds['seller_id'])) {
-                $refundOwnershipWhere[] = 'l.seller_id = :seller_id';
-            }
-            if (!$refundOwnershipWhere) {
-                $refundOwnershipWhere[] = 'l.seller_id = :seller_id';
-            }
+           $refundOwnershipWhere = [
+                'oi.seller_id = :seller_id',
+                'l.seller_id = :seller_id',
+            ]; 
 
             $sql = "
                 SELECT
