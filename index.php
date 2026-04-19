@@ -239,6 +239,56 @@ if (!function_exists('bv_member_sd_status_badge')) {
     }
 }
 
+if (!function_exists('bv_member_sd_age_hint')) {
+    function bv_member_sd_age_hint($timestamp): string
+    {
+        $ts = is_numeric($timestamp) ? (int)$timestamp : strtotime((string)$timestamp);
+        if (!$ts || $ts <= 0) {
+            return '';
+        }
+        $diff = time() - $ts;
+        if ($diff < 60) return 'just now';
+        if ($diff < 3600) return floor($diff / 60) . 'm ago';
+        if ($diff < 86400) return floor($diff / 3600) . 'h ago';
+        if ($diff < 604800) return floor($diff / 86400) . 'd ago';
+        return floor($diff / 604800) . 'w ago';
+    }
+}
+
+if (!function_exists('bv_member_sd_urgency_badge')) {
+    function bv_member_sd_urgency_badge(string $type, string $status, string $paymentStatus = '', $timestamp = null): array
+    {
+        $status = strtolower(trim($status));
+        $paymentStatus = strtolower(trim($paymentStatus));
+        $ageSeconds = 0;
+        $ts = is_numeric($timestamp) ? (int)$timestamp : strtotime((string)$timestamp);
+        if ($ts > 0) {
+            $ageSeconds = max(0, time() - $ts);
+        }
+
+        if ($type === 'order') {
+            if (in_array($paymentStatus, ['paid', 'captured', 'completed', 'success'], true) && in_array($status, ['pending', 'processing', 'confirmed', 'packing', 'paid', 'new'], true)) {
+                return $ageSeconds >= 86400 ? ['Urgent Pack', 'gold'] : ['Pack Soon', 'blue'];
+            }
+            return ['Normal', 'gray'];
+        }
+        if ($type === 'refund') {
+            if (in_array($status, ['pending_approval', 'requested', 'submitted', 'pending'], true)) {
+                return $ageSeconds >= 172800 ? ['Needs Review', 'gold'] : ['Awaiting Review', 'blue'];
+            }
+            return ['Processed', 'green'];
+        }
+        if ($type === 'offer') {
+            if (in_array($status, ['open'], true)) {
+                return $ageSeconds >= 86400 ? ['Reply Needed', 'gold'] : ['Waiting Reply', 'blue'];
+            }
+            return ['On Track', 'gray'];
+        }
+        return ['Normal', 'gray'];
+    }
+}
+
+
 $pdo = bv_member_pdo();
 $user = bv_member_require_login();
 $flash = bv_member_flash_get();
@@ -288,13 +338,19 @@ $sellerDashboardStats = [
     'refund_pending' => 0,
     'refund_processed' => 0,
     'open_offers' => 0,
+   'refunds_pending_approval' => 0,
+    'paid_waiting_pack' => 0,
+    'offers_waiting_action' => 0,	
     'this_month_sales' => 0.0,
+   'this_month_refunded' => 0.0,
+    'this_month_net_sales' => 0.0,	
     'currency' => 'USD',
 ];
 $sellerRecentOrders = [];
 $sellerRecentRefunds = [];
 $sellerRecentOfferThreads = [];
 $sellerSalesMonthly = [];
+$sellerRefundMonthly = [];
 
 $userId = (int)($user['id'] ?? 0);
 $buyerProfile = null;
@@ -799,6 +855,9 @@ if ($isSellerApproved && $userId > 0) {
                 }
                 if (in_array($payStatus, ['paid', 'captured', 'completed', 'success'], true)) {
                     $sellerDashboardStats['paid_orders']++;
+					                    if (in_array($oStatus, ['pending', 'processing', 'confirmed', 'packing', 'paid', 'new'], true)) {
+                        $sellerDashboardStats['paid_waiting_pack']++;
+                    }
                 }
             }
         }
@@ -867,6 +926,9 @@ if ($isSellerApproved && $userId > 0) {
                 } elseif (in_array($rStatus, ['refunded', 'rejected', 'failed', 'cancelled'], true)) {	
                     $sellerDashboardStats['refund_processed']++;
                 }
+              if (in_array($rStatus, ['pending_approval', 'requested', 'submitted', 'pending'], true)) {
+                    $sellerDashboardStats['refunds_pending_approval']++;
+                }
             }
         }
     } catch (Throwable $e) {
@@ -928,6 +990,9 @@ if ($isSellerApproved && $userId > 0) {
                 if (in_array($status, ['open', 'seller_accepted', 'buyer_checkout_ready'], true)) {
                     $sellerDashboardStats['open_offers']++;
                 }
+                if (in_array($status, ['open'], true)) {
+                    $sellerDashboardStats['offers_waiting_action']++;
+                }				
             }
         }
     } catch (Throwable $e) {
@@ -997,6 +1062,65 @@ if ($isSellerApproved && $userId > 0) {
     } catch (Throwable $e) {
         error_log('member index seller sales monthly load failed: ' . $e->getMessage());
     }
+
+    try {
+        if (bv_member_sd_table_exists($pdo, 'order_refunds') && bv_member_sd_table_exists($pdo, 'order_refund_items') && bv_member_sd_table_exists($pdo, 'order_items') && bv_member_sd_table_exists($pdo, 'listings')) {
+            $refundCols = bv_member_sd_columns($pdo, 'order_refunds');
+            $refundItemCols = bv_member_sd_columns($pdo, 'order_refund_items');
+            $orderItemCols = bv_member_sd_columns($pdo, 'order_items');
+            $listingColsForRefunds = bv_member_sd_columns($pdo, 'listings');
+
+            $refundMonthExpr = !empty($refundCols['approved_at']) ? 'r.approved_at' : (!empty($refundCols['requested_at']) ? 'r.requested_at' : (!empty($refundCols['updated_at']) ? 'r.updated_at' : 'r.created_at'));
+            $refundStatusExpr = !empty($refundCols['status']) ? 'r.status' : "'pending'";
+            $approvedAmountExpr = !empty($refundCols['approved_refund_amount']) ? 'r.approved_refund_amount' : (!empty($refundCols['approved_amount']) ? 'r.approved_amount' : (!empty($refundCols['requested_refund_amount']) ? 'r.requested_refund_amount' : '0'));
+            $refundCurrencyExpr = !empty($refundCols['currency']) ? 'r.currency' : "'USD'";
+
+            $refundOwnershipWhere = [];
+            if (!empty($orderItemCols['seller_id'])) {
+                $refundOwnershipWhere[] = 'oi.seller_id = :seller_id';
+            }
+            if (!empty($listingColsForRefunds['seller_id'])) {
+                $refundOwnershipWhere[] = 'l.seller_id = :seller_id';
+            }
+            if (!$refundOwnershipWhere) {
+                $refundOwnershipWhere[] = 'l.seller_id = :seller_id';
+            }
+
+            $sql = "
+                SELECT
+                    DATE_FORMAT(" . $refundMonthExpr . ", '%Y-%m') AS sales_month,
+                    SUM(CASE WHEN LOWER(COALESCE(" . $refundStatusExpr . ", '')) IN ('approved','processing','refunded','completed') THEN COALESCE(" . $approvedAmountExpr . ",0) ELSE 0 END) AS refunded_amount,
+                    MAX(COALESCE(" . $refundCurrencyExpr . ", 'USD')) AS currency
+                FROM order_refunds r
+                INNER JOIN order_refund_items ri ON ri.refund_id = r.id
+                LEFT JOIN order_items oi ON oi.id = ri.order_item_id
+                LEFT JOIN listings l ON l.id = COALESCE(ri.listing_id, oi.listing_id)
+                WHERE (" . implode(' OR ', $refundOwnershipWhere) . ")
+                GROUP BY DATE_FORMAT(" . $refundMonthExpr . ", '%Y-%m')
+                ORDER BY sales_month DESC
+                LIMIT 6
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([':seller_id' => $sellerId]);
+            $sellerRefundMonthly = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if ($sellerSalesMonthly) {
+                $month = (string)($sellerSalesMonthly[0]['sales_month'] ?? '');
+                $gross = (float)($sellerSalesMonthly[0]['gross_sales'] ?? 0);
+                $refunded = 0.0;
+                foreach ($sellerRefundMonthly as $refundMonthRow) {
+                    if ((string)($refundMonthRow['sales_month'] ?? '') === $month) {
+                        $refunded = (float)($refundMonthRow['refunded_amount'] ?? 0);
+                        break;
+                    }
+                }
+                $sellerDashboardStats['this_month_refunded'] = $refunded;
+                $sellerDashboardStats['this_month_net_sales'] = $gross - $refunded;
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('member index seller refunds monthly load failed: ' . $e->getMessage());
+    }
 }
 
 $profileRequiredFields = [
@@ -1038,7 +1162,7 @@ $buyerFullAddress = $buyerFullAddressParts ? implode(', ', $buyerFullAddressPart
 bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dashboard.');
 ?>
 <style>
-.member-wrap{max-width:1240px;margin:0 auto;padding:34px 16px 52px}.member-shell{display:grid;gap:18px}.panel{border:1px solid rgba(229,201,138,.14);border-radius:24px;background:linear-gradient(180deg,rgba(12,28,22,.96),rgba(10,20,16,.98));box-shadow:0 16px 44px rgba(0,0,0,.24)}.panel-body{padding:22px}.hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}.hero h1{margin:0 0 8px;font-size:36px;line-height:1.08;color:#f3efe6}.hero p{margin:0;color:#a8b6ae;max-width:780px;line-height:1.75}.actions{display:flex;gap:10px;flex-wrap:wrap}.btn,.btn-outline,.btn-soft{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border-radius:14px;font-weight:800;text-decoration:none;transition:.18s ease;border:1px solid transparent}.btn{background:#d8b56b;color:#182018}.btn-outline{background:transparent;color:#e7ddca;border-color:rgba(229,201,138,.34)}.btn-soft{background:rgba(255,255,255,.05);color:#e7ddca;border-color:rgba(255,255,255,.08)}.btn:hover,.btn-outline:hover,.btn-soft:hover{transform:translateY(-1px)}.grid-2{display:grid;grid-template-columns:1.15fr .85fr;gap:18px}.flash{padding:14px 16px;border-radius:16px;font-size:14px;line-height:1.6}.flash-success{background:rgba(64,166,103,.16);border:1px solid rgba(64,166,103,.28);color:#c7f0d5}.flash-error{background:rgba(214,92,92,.16);border:1px solid rgba(214,92,92,.28);color:#ffd5d5}.eyebrow{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;background:rgba(216,181,107,.14);color:#f7dfae;border:1px solid rgba(216,181,107,.26);margin-bottom:12px}.stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.stat-card strong{display:block;font-size:30px;color:#f5ebd9;margin-bottom:6px}.stat-card span{display:block;color:#9fb0a7;font-size:13px}.card-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.mini-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.mini-card h3{margin:0 0 10px;font-size:20px;color:#f3efe6}.mini-card p{margin:0;color:#a8b6ae;line-height:1.7}.status-pill{display:inline-flex;align-items:center;padding:7px 11px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.08);color:#fff}.status-pill.green{background:rgba(72,187,120,.16);color:#c9f5d7;border-color:rgba(72,187,120,.26)}.status-pill.gold{background:rgba(216,181,107,.16);color:#f8dfaa;border-color:rgba(216,181,107,.25)}.status-pill.blue{background:rgba(93,129,232,.18);color:#d6e1ff;border-color:rgba(93,129,232,.24)}.status-pill.gray{background:rgba(255,255,255,.08);color:#dbe3df}.list{display:grid;gap:10px}.list-item{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:14px 0;border-bottom:1px solid rgba(255,255,255,.08)}.list-item:last-child{border-bottom:none;padding-bottom:0}.list-item:first-child{padding-top:0}.muted{color:#98a89f}.empty{padding:18px;border-radius:18px;border:1px dashed rgba(229,201,138,.24);background:rgba(255,255,255,.02);color:#aab5af}.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.meta span{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);font-size:12px;color:#dbe2da}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.detail-box{padding:16px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.detail-box strong{display:block;color:#f3efe6;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}.detail-box div{color:#dce5de;line-height:1.7;word-break:break-word}.progress-line{height:10px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:12px}.progress-fill{height:100%;background:linear-gradient(90deg,#d8b56b,#f0d89f)}.offer-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}.offer-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.offer-card strong{display:block;font-size:30px;color:#f5ebd9;margin-bottom:6px}.offer-card span{display:block;color:#9fb0a7;font-size:13px}.table-wrap{width:100%;overflow:auto;border:1px solid rgba(255,255,255,.08);border-radius:16px}.data-table{width:100%;border-collapse:collapse;min-width:760px}.data-table th,.data-table td{padding:12px 12px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;font-size:13px;color:#dce5de;vertical-align:top}.data-table th{color:#f3efe6;font-size:12px;text-transform:uppercase;letter-spacing:.06em;background:rgba(255,255,255,.04)}.data-table tr:last-child td{border-bottom:none}.seller-kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:14px}@media (max-width:1200px){.seller-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (max-width:980px){.grid-2,.card-grid,.stat-grid,.detail-grid,.offer-grid,.seller-kpi-grid{grid-template-columns:1fr 1fr}}@media (max-width:720px){.member-wrap{padding:24px 14px 42px}.hero h1{font-size:30px}.grid-2,.card-grid,.stat-grid,.detail-grid,.offer-grid,.seller-kpi-grid{grid-template-columns:1fr}}
+.member-wrap{max-width:1240px;margin:0 auto;padding:34px 16px 52px}.member-shell{display:grid;gap:18px}.panel{border:1px solid rgba(229,201,138,.14);border-radius:24px;background:linear-gradient(180deg,rgba(12,28,22,.96),rgba(10,20,16,.98));box-shadow:0 16px 44px rgba(0,0,0,.24)}.panel-body{padding:22px}.hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}.hero h1{margin:0 0 8px;font-size:36px;line-height:1.08;color:#f3efe6}.hero p{margin:0;color:#a8b6ae;max-width:780px;line-height:1.75}.actions{display:flex;gap:10px;flex-wrap:wrap}.btn,.btn-outline,.btn-soft{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border-radius:14px;font-weight:800;text-decoration:none;transition:.18s ease;border:1px solid transparent}.btn{background:#d8b56b;color:#182018}.btn-outline{background:transparent;color:#e7ddca;border-color:rgba(229,201,138,.34)}.btn-soft{background:rgba(255,255,255,.05);color:#e7ddca;border-color:rgba(255,255,255,.08)}.btn:hover,.btn-outline:hover,.btn-soft:hover,.stat-link:hover{transform:translateY(-1px)}.grid-2{display:grid;grid-template-columns:1.15fr .85fr;gap:18px}.flash{padding:14px 16px;border-radius:16px;font-size:14px;line-height:1.6}.flash-success{background:rgba(64,166,103,.16);border:1px solid rgba(64,166,103,.28);color:#c7f0d5}.flash-error{background:rgba(214,92,92,.16);border:1px solid rgba(214,92,92,.28);color:#ffd5d5}.eyebrow{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;background:rgba(216,181,107,.14);color:#f7dfae;border:1px solid rgba(216,181,107,.26);margin-bottom:12px}.stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.stat-link{display:block;text-decoration:none;transition:.18s ease}.stat-card strong{display:block;font-size:30px;color:#f5ebd9;margin-bottom:6px}.stat-card span{display:block;color:#9fb0a7;font-size:13px}.card-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.mini-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.mini-card h3{margin:0 0 10px;font-size:20px;color:#f3efe6}.mini-card p{margin:0;color:#a8b6ae;line-height:1.7}.status-pill{display:inline-flex;align-items:center;padding:7px 11px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.08);color:#fff}.status-pill.green{background:rgba(72,187,120,.16);color:#c9f5d7;border-color:rgba(72,187,120,.26)}.status-pill.gold{background:rgba(216,181,107,.16);color:#f8dfaa;border-color:rgba(216,181,107,.25)}.status-pill.blue{background:rgba(93,129,232,.18);color:#d6e1ff;border-color:rgba(93,129,232,.24)}.status-pill.gray{background:rgba(255,255,255,.08);color:#dbe3df}.list{display:grid;gap:10px}.list-item{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:14px 0;border-bottom:1px solid rgba(255,255,255,.08)}.list-item:last-child{border-bottom:none;padding-bottom:0}.list-item:first-child{padding-top:0}.muted{color:#98a89f}.empty{padding:18px;border-radius:18px;border:1px dashed rgba(229,201,138,.24);background:rgba(255,255,255,.02);color:#aab5af}.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.meta span{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);font-size:12px;color:#dbe2da}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.detail-box{padding:16px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.detail-box strong{display:block;color:#f3efe6;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}.detail-box div{color:#dce5de;line-height:1.7;word-break:break-word}.progress-line{height:10px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:12px}.progress-fill{height:100%;background:linear-gradient(90deg,#d8b56b,#f0d89f)}.offer-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}.offer-card{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}.offer-card strong{display:block;font-size:30px;color:#f5ebd9;margin-bottom:6px}.offer-card span{display:block;color:#9fb0a7;font-size:13px}.table-wrap{width:100%;overflow:auto;border:1px solid rgba(255,255,255,.08);border-radius:16px}.data-table{width:100%;border-collapse:collapse;min-width:760px}.data-table th,.data-table td{padding:12px 12px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;font-size:13px;color:#dce5de;vertical-align:top}.data-table th{color:#f3efe6;font-size:12px;text-transform:uppercase;letter-spacing:.06em;background:rgba(255,255,255,.04)}.data-table tr:last-child td{border-bottom:none}.seller-kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:14px}.alerts-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px}.alert-card{padding:16px;border-radius:16px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03)}.alert-card strong{display:block;font-size:26px;color:#f5ebd9}.alert-card .muted{margin-top:6px}#priority-alerts{scroll-margin-top:100px}@media (max-width:1200px){.seller-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.alerts-grid{grid-template-columns:1fr}}@media (max-width:980px){.grid-2,.card-grid,.stat-grid,.detail-grid,.offer-grid,.seller-kpi-grid{grid-template-columns:1fr 1fr}}@media (max-width:720px){.member-wrap{padding:24px 14px 42px}.hero h1{font-size:30px}.grid-2,.card-grid,.stat-grid,.detail-grid,.offer-grid,.seller-kpi-grid{grid-template-columns:1fr}}
 </style>
 
 <div class="member-wrap">
@@ -1444,12 +1568,39 @@ bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dash
           </div>
 
           <div class="seller-kpi-grid">
-            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['new_orders'] ?></strong><span>New Orders</span></div>
-            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['paid_orders'] ?></strong><span>Paid Orders</span></div>
-            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['refund_pending'] ?></strong><span>Refund Pending</span></div>
-            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['refund_processed'] ?></strong><span>Refund Processed</span></div>
-            <div class="stat-card"><strong><?= (int)$sellerDashboardStats['open_offers'] ?></strong><span>Open Offers</span></div>
-            <div class="stat-card"><strong><?= bv_member_e(bv_member_sd_money((float)$sellerDashboardStats['this_month_sales'], (string)$sellerDashboardStats['currency'])) ?></strong><span>This Month Sales</span></div>
+                 <a class="stat-link" href="<?= bv_member_e($orderPage) ?>"><div class="stat-card"><strong><?= (int)$sellerDashboardStats['new_orders'] ?></strong><span>New Orders</span></div></a>
+            <a class="stat-link" href="<?= bv_member_e($orderPage) ?>"><div class="stat-card"><strong><?= (int)$sellerDashboardStats['paid_orders'] ?></strong><span>Paid Orders</span></div></a>
+            <a class="stat-link" href="<?= bv_member_e($refundPage) ?>"><div class="stat-card"><strong><?= (int)$sellerDashboardStats['refund_pending'] ?></strong><span>Refund Pending</span></div></a>
+            <a class="stat-link" href="<?= bv_member_e($refundPage) ?>"><div class="stat-card"><strong><?= (int)$sellerDashboardStats['refund_processed'] ?></strong><span>Refund Processed</span></div></a>
+            <a class="stat-link" href="<?= bv_member_e($offerPage) ?>"><div class="stat-card"><strong><?= (int)$sellerDashboardStats['open_offers'] ?></strong><span>Open Offers</span></div></a>
+            <a class="stat-link" href="#seller-sales-summary"><div class="stat-card"><strong><?= bv_member_e(bv_member_sd_money((float)$sellerDashboardStats['this_month_sales'], (string)$sellerDashboardStats['currency'])) ?></strong><span>This Month Sales</span></div></a>
+          </div>
+
+          <div id="priority-alerts" class="mini-card" style="margin-bottom:14px;">
+            <h3>Priority Alerts</h3>
+            <div class="alerts-grid">
+              <div class="alert-card">
+                <span class="status-pill <?= ((int)$sellerDashboardStats['refunds_pending_approval'] > 0 ? 'gold' : 'green') ?>"><?= (int)$sellerDashboardStats['refunds_pending_approval'] > 0 ? 'Action Needed' : 'Clear' ?></span>
+                <strong><?= (int)$sellerDashboardStats['refunds_pending_approval'] ?></strong>
+                <div>Refunds Pending Approval</div>
+                <div class="muted">Review requests waiting for seller decision.</div>
+                <div style="margin-top:10px;"><a class="btn-soft" href="<?= bv_member_e($refundPage) ?>">Open Refund Queue</a></div>
+              </div>
+              <div class="alert-card">
+                <span class="status-pill <?= ((int)$sellerDashboardStats['paid_waiting_pack'] > 0 ? 'gold' : 'green') ?>"><?= (int)$sellerDashboardStats['paid_waiting_pack'] > 0 ? 'Pack Queue' : 'Clear' ?></span>
+                <strong><?= (int)$sellerDashboardStats['paid_waiting_pack'] ?></strong>
+                <div>Paid Orders Waiting to Pack</div>
+                <div class="muted">Paid but not yet shipped/completed.</div>
+                <div style="margin-top:10px;"><a class="btn-soft" href="<?= bv_member_e($orderPage) ?>">Open Orders</a></div>
+              </div>
+              <div class="alert-card">
+                <span class="status-pill <?= ((int)$sellerDashboardStats['offers_waiting_action'] > 0 ? 'gold' : 'green') ?>"><?= (int)$sellerDashboardStats['offers_waiting_action'] > 0 ? 'Needs Reply' : 'Clear' ?></span>
+                <strong><?= (int)$sellerDashboardStats['offers_waiting_action'] ?></strong>
+                <div>Open Offers Waiting for Seller</div>
+                <div class="muted">Buyer negotiations still waiting for your response.</div>
+                <div style="margin-top:10px;"><a class="btn-soft" href="<?= bv_member_e($offerPage) ?>">Open Offers</a></div>
+              </div>
+            </div>      
           </div>
 
           <div class="grid-2">
@@ -1460,10 +1611,10 @@ bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dash
               <?php else: ?>
                 <div class="table-wrap">
                   <table class="data-table">
-                    <thead><tr><th>Order</th><th>Buyer</th><th>Listing</th><th>Qty</th><th>Total</th><th>Status</th><th>Payment</th><th>Action</th></tr></thead>
+                        <thead><tr><th>Order</th><th>Buyer</th><th>Listing</th><th>Qty</th><th>Total</th><th>Status</th><th>Payment</th><th>Urgency</th><th>Age</th><th>Action</th></tr></thead>
                     <tbody>
                     <?php foreach ($sellerRecentOrders as $row): ?>
-                      <?php [$orderLabel,$orderClass]=bv_member_sd_status_badge((string)($row['order_status'] ?? '')); [$paymentLabel,$paymentClass]=bv_member_sd_status_badge((string)($row['payment_status'] ?? '')); $orderId=(int)($row['order_id'] ?? 0); ?>
+					<?php [$orderLabel,$orderClass]=bv_member_sd_status_badge((string)($row['order_status'] ?? '')); [$paymentLabel,$paymentClass]=bv_member_sd_status_badge((string)($row['payment_status'] ?? '')); [$urgencyLabel,$urgencyClass]=bv_member_sd_urgency_badge('order', (string)($row['order_status'] ?? ''), (string)($row['payment_status'] ?? ''), (string)($row['created_at'] ?? '')); $orderId=(int)($row['order_id'] ?? 0); ?>
                       <tr>
                         <td><?= bv_member_e((string)($row['order_code'] ?? ('ORD-' . $orderId))) ?></td>
                         <td><?= bv_member_e((string)($row['buyer_name'] ?? 'Buyer')) ?></td>
@@ -1472,6 +1623,8 @@ bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dash
                         <td><?= bv_member_e(bv_member_sd_money((float)($row['total'] ?? 0), (string)($row['currency'] ?? 'USD'))) ?></td>
                         <td><span class="status-pill <?= $orderClass ?>"><?= bv_member_e($orderLabel) ?></span></td>
                         <td><span class="status-pill <?= $paymentClass ?>"><?= bv_member_e($paymentLabel) ?></span></td>
+                        <td><span class="status-pill <?= $urgencyClass ?>"><?= bv_member_e($urgencyLabel) ?></span></td>
+                        <td><?= bv_member_e(bv_member_sd_age_hint((string)($row['created_at'] ?? ''))) ?></td>
                         <td><a class="btn-soft" href="<?= bv_member_e(bv_member_sd_url($orderPage, ['id' => $orderId])) ?>">View</a></td>
                       </tr>
                     <?php endforeach; ?>
@@ -1488,16 +1641,18 @@ bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dash
               <?php else: ?>
                 <div class="table-wrap">
                   <table class="data-table">
-                    <thead><tr><th>Refund</th><th>Order</th><th>Requested</th><th>Approved</th><th>Status</th><th>Action</th></tr></thead>
+                    <thead><tr><th>Refund</th><th>Order</th><th>Requested</th><th>Approved</th><th>Status</th><th>Urgency</th><th>Age</th><th>Action</th></tr></thead>
                     <tbody>
                     <?php foreach ($sellerRecentRefunds as $row): ?>
-                      <?php [$refundLabel,$refundClass]=bv_member_sd_status_badge((string)($row['refund_status'] ?? '')); $refundId=(int)($row['refund_id'] ?? 0); $refundOrderId=(int)($row['order_id'] ?? 0); ?>
+					<?php [$refundLabel,$refundClass]=bv_member_sd_status_badge((string)($row['refund_status'] ?? '')); [$urgencyLabel,$urgencyClass]=bv_member_sd_urgency_badge('refund', (string)($row['refund_status'] ?? ''), '', (string)($row['requested_at'] ?? '')); $refundId=(int)($row['refund_id'] ?? 0); $refundOrderId=(int)($row['order_id'] ?? 0); ?>                     
                       <tr>
                         <td><?= bv_member_e((string)($row['refund_code'] ?? ('RF-' . $refundId))) ?></td>
                         <td><?= bv_member_e((string)($row['order_code'] ?? ('ORD-' . $refundOrderId))) ?></td>
                         <td><?= isset($row['requested_refund_amount']) ? bv_member_e(bv_member_sd_money((float)($row['requested_refund_amount'] ?? 0), (string)($row['currency'] ?? 'USD'))) : '-' ?></td>
                         <td><?= isset($row['approved_refund_amount']) ? bv_member_e(bv_member_sd_money((float)($row['approved_refund_amount'] ?? 0), (string)($row['currency'] ?? 'USD'))) : '-' ?></td> 
                         <td><span class="status-pill <?= $refundClass ?>"><?= bv_member_e($refundLabel) ?></span></td>
+                        <td><span class="status-pill <?= $urgencyClass ?>"><?= bv_member_e($urgencyLabel) ?></span></td>
+                        <td><?= bv_member_e(bv_member_sd_age_hint((string)($row['requested_at'] ?? ''))) ?></td>						
                         <td><a class="btn-soft" href="<?= bv_member_e(bv_member_sd_url($refundPage, ['id' => $refundId])) ?>">View</a></td>
                       </tr>
                     <?php endforeach; ?>
@@ -1516,16 +1671,18 @@ bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dash
               <?php else: ?>
                 <div class="table-wrap">
                   <table class="data-table">
-                    <thead><tr><th>Offer</th><th>Buyer</th><th>Listing</th><th>Offer Price</th><th>Status</th><th>Action</th></tr></thead>
+                     <thead><tr><th>Offer</th><th>Buyer</th><th>Listing</th><th>Offer Price</th><th>Status</th><th>Urgency</th><th>Age</th><th>Action</th></tr></thead>
                     <tbody>
                     <?php foreach ($sellerRecentOfferThreads as $row): ?>
-                      <?php [$offerStatusLabel,$offerStatusClass]=bv_member_sd_status_badge((string)($row['offer_status'] ?? '')); $offerId=(int)($row['offer_id'] ?? 0); ?>
+					<?php [$offerStatusLabel,$offerStatusClass]=bv_member_sd_status_badge((string)($row['offer_status'] ?? '')); [$urgencyLabel,$urgencyClass]=bv_member_sd_urgency_badge('offer', (string)($row['offer_status'] ?? ''), '', (string)($row['updated_at'] ?? '')); $offerId=(int)($row['offer_id'] ?? 0); ?>                    
                       <tr>
                         <td><?= bv_member_e((string)($row['offer_code'] ?? ('OFF-' . $offerId))) ?></td>
                         <td><?= bv_member_e((string)($row['buyer_name'] ?? 'Buyer')) ?></td>
                         <td><?= bv_member_e((string)($row['listing_title'] ?? '-')) ?></td>
                         <td><?= bv_member_e(bv_member_sd_money((float)($row['offer_price'] ?? 0), (string)($row['currency'] ?? 'USD'))) ?></td>
                         <td><span class="status-pill <?= $offerStatusClass ?>"><?= bv_member_e($offerStatusLabel) ?></span></td>
+						<td><span class="status-pill <?= $urgencyClass ?>"><?= bv_member_e($urgencyLabel) ?></span></td>
+                        <td><?= bv_member_e(bv_member_sd_age_hint((string)($row['updated_at'] ?? ''))) ?></td>
                         <td><a class="btn-soft" href="<?= bv_member_e(bv_member_sd_url($offerPage, ['id' => $offerId])) ?>">Open</a></td>
                       </tr>
                     <?php endforeach; ?>
@@ -1535,20 +1692,38 @@ bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dash
               <?php endif; ?>
             </div>
 
-            <div class="mini-card">
+              <div class="mini-card" id="seller-sales-summary">
               <h3>Sales Summary by Month</h3>
               <?php if (!$sellerSalesMonthly): ?>
                 <div class="empty">No sales summary data yet.</div>
               <?php else: ?>
                 <div class="table-wrap">
                   <table class="data-table">
-                    <thead><tr><th>Month</th><th>Orders</th><th>Gross Sales</th></tr></thead>
+                     <thead><tr><th>Month</th><th>Orders</th><th>Gross Sales</th><th>Refunded</th><th>Net Sales</th></tr></thead>
                     <tbody>
                     <?php foreach ($sellerSalesMonthly as $row): ?>
+                     <?php
+                      $month = (string)($row['sales_month'] ?? '');
+                      $grossSales = (float)($row['gross_sales'] ?? 0);
+                      $currency = (string)($row['currency'] ?? $sellerDashboardStats['currency']);
+                      $refundedAmount = 0.0;
+                      foreach ($sellerRefundMonthly as $refundMonthRow) {
+                          if ((string)($refundMonthRow['sales_month'] ?? '') === $month) {
+                              $refundedAmount = (float)($refundMonthRow['refunded_amount'] ?? 0);
+                              if (trim((string)($refundMonthRow['currency'] ?? '')) !== '') {
+                                  $currency = (string)$refundMonthRow['currency'];
+                              }
+                              break;
+                          }
+                      }
+                      $netSales = $grossSales - $refundedAmount;
+                      ?>					
                       <tr>
-                        <td><?= bv_member_e((string)($row['sales_month'] ?? '-')) ?></td>
+                       <td><?= bv_member_e($month !== '' ? $month : '-') ?></td>
                         <td><?= (int)($row['orders_count'] ?? 0) ?></td>
-                        <td><?= bv_member_e(bv_member_sd_money((float)($row['gross_sales'] ?? 0), (string)($row['currency'] ?? $sellerDashboardStats['currency']))) ?></td>
+                       <td><?= bv_member_e(bv_member_sd_money($grossSales, $currency)) ?></td>
+                        <td><?= bv_member_e(bv_member_sd_money($refundedAmount, $currency)) ?></td>
+                        <td><?= bv_member_e(bv_member_sd_money($netSales, $currency)) ?></td>                      
                       </tr>
                     <?php endforeach; ?>
                     </tbody>
@@ -1736,5 +1911,4 @@ bv_member_page_begin('My Account | Bettavaro', 'Bettavaro member and seller dash
     <?php endif; ?>
   </div>
 </div>
-
 <?php bv_member_page_end(); ?>
