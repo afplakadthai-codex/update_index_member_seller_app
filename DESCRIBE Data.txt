@@ -1,0 +1,216 @@
+DA PMA SignOn:3306/saladfa1_bettavaro/listing_offers/		http://cs95.hostneverdie.com/phpMyAdmin/index.php?route=/table/sql&db=saladfa1_bettavaro&table=listing_offers
+
+   Your SQL query has been executed successfully. (Query took 0.0008 seconds.)
+
+
+DESCRIBE orders;
+
+
+
+id	bigint(20) unsigned	NO	PRI	NULL	auto_increment	
+user_id	bigint(20) unsigned	YES	MUL	NULL		
+listing_id	int(10) unsigned	YES	MUL	NULL		
+session_token	varchar(255)	YES		NULL		
+order_code	varchar(40)	NO	UNI	NULL		
+order_source	enum('shop','auction','offer')	NO	MUL	shop		
+auction_award_id	bigint(20) unsigned	YES	MUL	NULL		
+payment_due_at	datetime	YES	MUL	NULL		
+status	enum('pending','pending_payment','reserved','paid','paid-awaiting-verify','processing','confirmed','packing','shipped','completed','cancelled','refunded')	NO	MUL	pending_payment		
+currency	char(3)	NO		USD		
+subtotal	decimal(12,2)	NO		0.00		
+subtotal_before_discount	decimal(10,2)	NO		0.00		
+seller_discount_total	decimal(10,2)	NO		0.00		
+platform_fee_total_snapshot	decimal(12,2)	NO		0.00		
+platform_fee_refundable_snapshot	decimal(12,2)	NO		0.00		
+platform_fee_non_refundable_snapshot	decimal(12,2)	NO		0.00		
+payment_gateway_fee_total_snapshot	decimal(12,2)	NO		0.00		
+payment_gateway_fee_refundable_snapshot	decimal(12,2)	NO		0.00		
+payment_gateway_fee_non_refundable_snapshot	decimal(12,2)	NO		0.00		
+fee_policy_code_snapshot	varchar(50)	YES	MUL	NULL		
+fee_policy_snapshot	longtext	YES		NULL		
+seller_net_amount_snapshot	decimal(12,2)	NO		0.00		
+discount_amount	decimal(12,2)	NO		0.00		
+shipping_amount	decimal(10,2)	NO		0.00		
+total	decimal(12,2)	NO		0.00		
+buyer_name	varchar(190)	NO		NULL		
+buyer_email	varchar(190)	NO		NULL		
+buyer_phone	varchar(40)	YES		NULL		
+buyer_line_id	varchar(120)	YES		NULL		
+buyer_whatsapp	varchar(40)	YES		NULL		
+country	varchar(120)	YES		NULL		
+ship_name	varchar(190)	NO		NULL		
+ship_address	text	YES		NULL		
+ship_phone	varchar(80)	YES		NULL		
+ship_email	varchar(190)	YES		NULL		
+trans_shipper	varchar(190)	YES		NULL		
+payment_method	varchar(80)	YES		NULL		
+payment_reference	varchar(120)	YES		NULL		
+payment_provider	varchar(50)	YES		NULL		
+payment_status	enum('pending','pending_payment','unpaid','paid','failed','refunded')	NO	MUL	pending		
+hold_expires_at	datetime	YES	MUL	NULL		
+ship_address_line1	varchar(255)	NO		NULL		
+ship_address_line2	varchar(255)	YES		NULL		
+ship_road	varchar(255)	YES		NULL		
+ship_subdistrict	varchar(150)	NO		NULL		
+ship_district	varchar(150)	NO		NULL		
+ship_province	varchar(150)	NO		NULL		
+ship_postal_code	varchar(20)	NO		NULL		
+ship_country	varchar(120)	NO		NULL		
+note	text	YES		NULL		
+meta_json	longtext	YES		NULL		
+stripe_session_id	varchar(120)	YES	UNI	NULL		
+stripe_checkout_url	text	YES		NULL		
+stripe_session_status	varchar(50)	YES		NULL		
+stripe_session_expires_at	datetime	YES		NULL		
+stripe_payment_intent_id	varchar(255)	YES		NULL		
+stripe_event_id	varchar(255)	YES		NULL		
+stripe_payment_intent	varchar(120)	YES		NULL		
+stripe_charge_id	varchar(120)	YES		NULL		
+stripe_last_event_id	varchar(120)	YES		NULL		
+checkout_session_status	varchar(30)	YES		NULL		
+paid_at	datetime	YES	MUL	NULL		
+paid_handler_done_at	datetime	YES		NULL		
+payment_confirmed_by	varchar(50)	YES		NULL		
+confirmed_at	datetime	YES		NULL		
+processing_at	datetime	YES		NULL		
+completed_at	datetime	YES		NULL		
+cancelled_at	datetime	YES		NULL		
+refunded_at	datetime	YES		NULL		
+refund_amount	decimal(12,2)	YES		NULL		
+refund_reason	varchar(255)	YES		NULL		
+stripe_refund_id	varchar(120)	YES		NULL		
+created_at	datetime	NO		current_timestamp()		
+updated_at	datetime	YES		current_timestamp()	on update current_timestamp()	
+gross_paid_amount	decimal(12,2)	NO		0.00		
+refundable_gross_amount	decimal(12,2)	NO		0.00		
+platform_fee_total	decimal(12,2)	NO		0.00		
+platform_fee_refundable	decimal(12,2)	NO		0.00		
+platform_fee_non_refundable	decimal(12,2)	NO		0.00		
+payment_gateway_fee_total	decimal(12,2)	NO		0.00		
+payment_gateway_fee_refundable	decimal(12,2)	NO		0.00		
+payment_gateway_fee_non_refundable	decimal(12,2)	NO		0.00		
+manual_deduction_amount	decimal(12,2)	NO		0.00		
+manual_deduction_reason	varchar(255)	YES		NULL		
+
+
+DA PMA SignOn:3306/saladfa1_bettavaro/listing_offers/		http://cs95.hostneverdie.com/phpMyAdmin/index.php?route=/table/sql&db=saladfa1_bettavaro&table=listing_offers
+
+   Your SQL query has been executed successfully. (Query took 0.0006 seconds.)
+
+
+DESCRIBE order_items;
+
+
+
+id	bigint(20) unsigned	NO	PRI	NULL	auto_increment	
+order_id	bigint(20) unsigned	NO	MUL	NULL		
+listing_id	bigint(20) unsigned	NO	MUL	NULL		
+seller_id	bigint(20) unsigned	YES	MUL	NULL		
+item_type	varchar(30)	NO		listing		
+item_title	varchar(255)	YES		NULL		
+item_slug	varchar(255)	YES		NULL		
+item_ref	varchar(100)	YES		NULL		
+title_snapshot	varchar(255)	NO		NULL		
+strain_snapshot	varchar(120)	YES		NULL		
+species_snapshot	varchar(120)	YES		NULL		
+cover_image_snapshot	varchar(255)	YES		NULL		
+seller_name_snapshot	varchar(190)	YES		NULL		
+currency	char(3)	NO		USD		
+qty	int(11)	NO		1		
+unit_price	decimal(12,2)	NO		0.00		
+quantity	int(11)	NO		1		
+line_total	decimal(12,2)	NO		0.00		
+snapshot_json	longtext	YES		NULL		
+created_at	datetime	NO		current_timestamp()		
+
+
+DA PMA SignOn:3306/saladfa1_bettavaro/listing_offers/		http://cs95.hostneverdie.com/phpMyAdmin/index.php?route=/table/sql&db=saladfa1_bettavaro&table=listing_offers
+
+   Your SQL query has been executed successfully. (Query took 0.0011 seconds.)
+
+
+DESCRIBE listings;
+
+
+
+id	int(10) unsigned	NO	PRI	NULL	auto_increment	
+seller_id	bigint(20) unsigned	YES	MUL	NULL		
+title	varchar(180)	NO		NULL		
+slug	varchar(220)	NO	UNI	NULL		
+short_description	varchar(255)	YES		NULL		
+description	text	YES		NULL		
+species	varchar(120)	YES	MUL	NULL		
+strain	varchar(120)	YES	MUL	NULL		
+grade	varchar(50)	YES	MUL	NULL		
+price	decimal(10,2)	NO		0.00		
+currency	char(3)	NO		USD		
+country	varchar(100)	YES		NULL		
+city	varchar(100)	YES		NULL		
+status	enum('draft','pending','active','sold','hidden')	NO	MUL	draft		
+sale_format	enum('fixed','auction','offer')	NO	MUL	fixed		
+auction_enabled	tinyint(1)	NO	MUL	0		
+auction_start_price	decimal(10,2)	YES		NULL		
+auction_min_increment	decimal(10,2)	YES		NULL		
+auction_start_at	datetime	YES		NULL		
+auction_end_at	datetime	YES		NULL		
+auction_finalized_at	datetime	YES		NULL		
+auction_winner_bid_id	bigint(20) unsigned	YES		NULL		
+auction_reserve_price	decimal(10,2)	YES		NULL		
+auction_starts_at	datetime	YES		NULL		
+auction_ends_at	datetime	YES	MUL	NULL		
+auction_status	enum('scheduled','live','ended','awaiting_payment','paid','closed','cancelled','expired')	YES	MUL	NULL		
+auction_winner_user_id	bigint(20) unsigned	YES	MUL	NULL		
+auction_final_price	decimal(10,2)	YES		NULL		
+auction_current_bid	decimal(10,2)	YES		NULL		
+auction_bid_count	int(10) unsigned	NO		0		
+auction_last_bid_at	datetime	YES		NULL		
+winner_payment_due_at	datetime	YES		NULL		
+sale_status	enum('available','reserved','sold')	NO	MUL	available		
+stock_total	int(10) unsigned	NO	MUL	1		
+stock_sold	int(10) unsigned	NO	MUL	0		
+stock_available	int(10) unsigned	NO	MUL	1		
+reserved_at	datetime	YES		NULL		
+sold_at	datetime	YES		NULL		
+reserved_reservation_id	bigint(20) unsigned	YES	MUL	NULL		
+featured	tinyint(1)	NO	MUL	0		
+cover_image	varchar(255)	YES		NULL		
+meta_title	varchar(255)	YES		NULL		
+meta_description	varchar(255)	YES		NULL		
+admin_note	text	YES		NULL		
+updated_by_admin_id	int(10) unsigned	YES		NULL		
+created_at	datetime	NO	MUL	current_timestamp()		
+updated_at	datetime	NO		current_timestamp()	on update current_timestamp()	
+
+
+DA PMA SignOn:3306/saladfa1_bettavaro/listing_offers/		http://cs95.hostneverdie.com/phpMyAdmin/index.php?route=/table/sql&db=saladfa1_bettavaro&table=listing_offers
+
+   Your SQL query has been executed successfully. (Query took 0.0006 seconds.)
+
+
+DESCRIBE users;
+
+
+
+id	bigint(20) unsigned	NO	PRI	NULL	auto_increment	
+first_name	varchar(100)	NO		NULL		
+last_name	varchar(100)	NO		NULL		
+email	varchar(190)	NO	UNI	NULL		
+phone	varchar(30)	YES		NULL		
+whatsapp	varchar(30)	YES		NULL		
+address_line1	varchar(255)	YES		NULL		
+address_line2	varchar(255)	YES		NULL		
+road	varchar(255)	YES		NULL		
+subdistrict	varchar(150)	YES		NULL		
+district	varchar(150)	YES		NULL		
+province	varchar(150)	YES		NULL		
+postal_code	varchar(20)	YES		NULL		
+country	varchar(120)	YES		NULL		
+password_hash	varchar(255)	NO		NULL		
+role	enum('user','seller','admin')	NO	MUL	user		
+account_status	enum('active','pending','suspended','deleted')	NO	MUL	active		
+email_verified_at	datetime	YES		NULL		
+last_login_at	datetime	YES		NULL		
+last_login_ip	varchar(45)	YES		NULL		
+created_at	datetime	NO		current_timestamp()		
+updated_at	datetime	NO		current_timestamp()	on update current_timestamp()	
+
