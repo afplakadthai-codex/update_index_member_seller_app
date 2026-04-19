@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once dirname(__DIR__, 2) . '/_listing_bootstrap.php';
+require_once dirname(__DIR__) . '/_listing_bootstrap.php';
 
 $pdo = bv_member_pdo();
 $user = bv_member_require_seller($pdo);
@@ -169,7 +169,17 @@ foreach (['buyer_email', 'ship_email'] as $col) {
 }
 $buyerExpr = 'COALESCE(' . implode(', ', array_merge($buyerNameChain, ["'Customer'"])) . ')';
 
-$itemTitleExpr = "COALESCE(NULLIF(TRIM(oi.`item_title`), ''), NULLIF(TRIM(oi.`title_snapshot`), ''), NULLIF(TRIM(l.`title`), ''), '—')";
+$itemTitleChain = [];
+if (isset($orderItemCols['item_title'])) {
+    $itemTitleChain[] = "NULLIF(TRIM(oi.`item_title`), '')";
+}
+if (isset($orderItemCols['title_snapshot'])) {
+    $itemTitleChain[] = "NULLIF(TRIM(oi.`title_snapshot`), '')";
+}
+if (isset($listingCols['title'])) {
+    $itemTitleChain[] = "NULLIF(TRIM(l.`title`), '')";
+}
+$itemTitleExpr = 'COALESCE(' . implode(', ', array_merge($itemTitleChain, ["'—'"])) . ')';
 $qtyExpr = isset($orderItemCols['qty']) ? 'COALESCE(oi.`qty`, 0)' : (isset($orderItemCols['quantity']) ? 'COALESCE(oi.`quantity`, 0)' : '0');
 $lineTotalExpr = isset($orderItemCols['line_total']) ? 'COALESCE(oi.`line_total`, 0)' : ((isset($orderItemCols['unit_price']) && (isset($orderItemCols['qty']) || isset($orderItemCols['quantity']))) ? 'COALESCE(oi.`unit_price`, 0) * ' . $qtyExpr : '0');
 
@@ -177,6 +187,17 @@ $params = [':seller_id' => $sellerId];
 $where = [
     '(oi.`seller_id` = :seller_id OR l.`seller_id` = :seller_id)',
 ];
+
+$buyerJoinKey = null;
+foreach (['buyer_user_id', 'member_id', 'user_id'] as $candidateCol) {
+    if (isset($orderCols[$candidateCol])) {
+        $buyerJoinKey = $candidateCol;
+        break;
+    }
+}
+$buyerJoinSql = $buyerJoinKey !== null
+    ? "LEFT JOIN `users` u ON u.`id` = o.`{$buyerJoinKey}`"
+    : "LEFT JOIN `users` u ON 1=0";
 
 if ($statusFilter !== 'all') {
     $params[':status_filter'] = $statusFilter;
@@ -213,7 +234,7 @@ $summarySql = "
     FROM `orders` o
     LEFT JOIN `order_items` oi ON oi.`order_id` = o.`id`
     LEFT JOIN `listings` l ON l.`id` = oi.`listing_id`
-    LEFT JOIN `users` u ON u.`id` = o.`user_id`
+     {$buyerJoinSql}
     WHERE {$whereSql}
 ";
 
@@ -232,7 +253,7 @@ $countSql = "
         FROM `orders` o
         LEFT JOIN `order_items` oi ON oi.`order_id` = o.`id`
         LEFT JOIN `listings` l ON l.`id` = oi.`listing_id`
-        LEFT JOIN `users` u ON u.`id` = o.`user_id`
+        {$buyerJoinSql}
         WHERE {$whereSql}
         GROUP BY o.`id`
     ) x
@@ -270,7 +291,7 @@ $listSql = "
     FROM `orders` o
     LEFT JOIN `order_items` oi ON oi.`order_id` = o.`id`
     LEFT JOIN `listings` l ON l.`id` = oi.`listing_id`
-    LEFT JOIN `users` u ON u.`id` = o.`user_id`
+    {$buyerJoinSql}
     WHERE {$whereSql}
     GROUP BY o.`id`, order_code, buyer_display, subtotal_amount, total_amount, currency_code, order_status, payment_status, shipping_status
     ORDER BY MAX({$dateSoldExpr}) DESC, o.`id` DESC
