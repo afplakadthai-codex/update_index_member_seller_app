@@ -1,10 +1,258 @@
 <?php
 declare(strict_types=1);
 
-require_once dirname(__DIR__) . '/member/_listing_bootstrap.php';
+$bootstrapCandidates = [
+    __DIR__ . '/_listing_bootstrap.php',
+    dirname(__DIR__) . '/member/_listing_bootstrap.php',
+];
 
-$pdo = bv_member_pdo();
-$user = bv_member_require_seller($pdo);
+foreach ($bootstrapCandidates as $bootstrapPath) {
+    if (is_file($bootstrapPath)) {
+        require_once $bootstrapPath;
+        break;
+    }
+}
+if (!function_exists('bv_member_h')) {
+    function bv_member_h($value): string
+    {
+        return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (!function_exists('seller_orders_http_500')) {
+    function seller_orders_http_500(string $message): void
+    {
+        http_response_code(500);
+        header('Content-Type: text/plain; charset=UTF-8');
+        exit($message);
+    }
+}
+
+if (!function_exists('seller_orders_db')) {
+    function seller_orders_db()
+    {
+        $candidates = [
+            $GLOBALS['pdo'] ?? null,
+            $GLOBALS['PDO'] ?? null,
+            $GLOBALS['conn'] ?? null,
+            $GLOBALS['db'] ?? null,
+            $GLOBALS['mysqli'] ?? null,
+        ];
+        foreach ($candidates as $candidate) {
+            if ($candidate instanceof PDO || $candidate instanceof mysqli) {
+                return $candidate;
+            }
+        }
+        return null;
+    }
+}
+
+if (!function_exists('seller_orders_is_pdo')) {
+    function seller_orders_is_pdo($db): bool
+    {
+        return $db instanceof PDO;
+    }
+}
+
+if (!function_exists('seller_orders_is_mysqli')) {
+    function seller_orders_is_mysqli($db): bool
+    {
+        return $db instanceof mysqli;
+    }
+}
+
+if (!function_exists('seller_orders_mysqli_sql')) {
+    function seller_orders_mysqli_sql(string $sql, array $params): array
+    {
+        if (!$params) {
+            return [$sql, []];
+        }
+
+        $ordered = [];
+        $parsedSql = preg_replace_callback('/:[a-zA-Z0-9_]+/', static function (array $m) use ($params, &$ordered): string {
+            $name = $m[0];
+            if (array_key_exists($name, $params)) {
+                $ordered[] = $params[$name];
+                return '?';
+            }
+            return $name;
+        }, $sql);
+
+        return [$parsedSql, $ordered];
+    }
+}
+
+if (!function_exists('seller_orders_mysqli_bind_execute')) {
+    function seller_orders_mysqli_bind_execute(mysqli_stmt $stmt, array $params): void
+    {
+        if ($params) {
+            $types = '';
+            $values = [];
+            foreach ($params as $value) {
+                if (is_int($value)) {
+                    $types .= 'i';
+                } elseif (is_float($value)) {
+                    $types .= 'd';
+                } else {
+                    $types .= 's';
+                }
+                $values[] = $value;
+            }
+
+            $bindArgs = [$types];
+            foreach ($values as $i => $value) {
+                $bindArgs[] = &$values[$i];
+            }
+
+            if (!call_user_func_array([$stmt, 'bind_param'], $bindArgs)) {
+                throw new RuntimeException('Failed to bind mysqli parameters.');
+            }
+        }
+
+        if (!$stmt->execute()) {
+            throw new RuntimeException((string)$stmt->error);
+        }
+    }
+}
+
+if (!function_exists('seller_orders_query_all')) {
+    function seller_orders_query_all($db, string $sql, array $params = []): array
+    {
+        if (seller_orders_is_pdo($db)) {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new RuntimeException('Failed to prepare PDO statement.');
+            }
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            return is_array($rows) ? $rows : [];
+        }
+
+        if (seller_orders_is_mysqli($db)) {
+            [$parsedSql, $orderedParams] = seller_orders_mysqli_sql($sql, $params);
+            $stmt = $db->prepare($parsedSql);
+            if (!$stmt) {
+                throw new RuntimeException((string)$db->error);
+            }
+            seller_orders_mysqli_bind_execute($stmt, $orderedParams);
+            $result = $stmt->get_result();
+            if (!$result) {
+                $stmt->close();
+                return [];
+            }
+            $rows = [];
+            while ($row = $result->fetch_assoc()) {
+                $rows[] = $row;
+            }
+            $result->free();
+            $stmt->close();
+            return $rows;
+        }
+
+        throw new RuntimeException('Unsupported database connection type.');
+    }
+}
+
+if (!function_exists('seller_orders_query_one')) {
+    function seller_orders_query_one($db, string $sql, array $params = []): array
+    {
+        $rows = seller_orders_query_all($db, $sql, $params);
+        return (array)($rows[0] ?? []);
+    }
+}
+
+if (!function_exists('seller_orders_query_value')) {
+    function seller_orders_query_value($db, string $sql, array $params = [])
+    {
+        $row = seller_orders_query_one($db, $sql, $params);
+        if (!$row) {
+            return null;
+        }
+        return reset($row);
+    }
+}
+
+if (!function_exists('seller_orders_table_exists')) {
+    function seller_orders_table_exists($db, string $table): bool
+    {
+        try {
+            if (seller_orders_is_pdo($db)) {
+                $stmt = $db->prepare('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = :table');
+                $stmt->execute([':table' => $table]);
+                return ((int)$stmt->fetchColumn()) > 0;
+            }
+
+            if (seller_orders_is_mysqli($db)) {
+                $stmt = $db->prepare('SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?');
+                if (!$stmt) {
+                    return false;
+                }
+                $tableName = $table;
+                $stmt->bind_param('s', $tableName);
+                if (!$stmt->execute()) {
+                    $stmt->close();
+                    return false;
+                }
+                $result = $stmt->get_result();
+                $row = $result ? $result->fetch_assoc() : null;
+                if ($result) {
+                    $result->free();
+                }
+                $stmt->close();
+                return ((int)($row['cnt'] ?? 0)) > 0;
+            }
+        } catch (Throwable $e) {
+            return false;
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('seller_orders_table_columns')) {
+    function seller_orders_table_columns($db, string $table): array
+    {
+        $safeTable = str_replace('`', '``', $table);
+        try {
+            $rows = seller_orders_query_all($db, "SHOW COLUMNS FROM `{$safeTable}`");
+            $columns = [];
+            foreach ($rows as $row) {
+                $field = (string)($row['Field'] ?? '');
+                if ($field !== '') {
+                    $columns[$field] = $row;
+                }
+            }
+            return $columns;
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+}
+
+$db = seller_orders_db();
+if (!$db) {
+    seller_orders_http_500('Database connection not available.');
+}
+
+if (!seller_orders_table_exists($db, 'orders')) {
+    seller_orders_http_500('Orders table not found.');
+}
+
+if (seller_orders_is_pdo($db) && function_exists('bv_member_require_seller')) {
+    $user = bv_member_require_seller($db);
+} elseif (function_exists('bv_member_require_login')) {
+    $user = bv_member_require_login();
+} else {
+    $user = (array)($_SESSION['user'] ?? $_SESSION['member'] ?? []);
+}
+
+$role = strtolower(trim((string)($user['role'] ?? 'user')));
+$sellerStatus = strtolower(trim((string)($user['seller_application_status'] ?? '')));
+if ($role !== 'seller' && $sellerStatus !== 'approved') {
+    http_response_code(403);
+    exit('Seller access denied.');
+}
+
 $sellerId = (int)($user['id'] ?? 0);
 if ($sellerId <= 0) {
     http_response_code(403);
@@ -98,10 +346,11 @@ if (!function_exists('seller_orders_existing_page')) {
     }
 }
 
-$orderCols = bv_member_table_columns($pdo, 'orders');
-$orderItemCols = bv_member_table_columns($pdo, 'order_items');
-$listingCols = bv_member_table_columns($pdo, 'listings');
-$userCols = bv_member_table_columns($pdo, 'users');
+$orderCols = seller_orders_table_columns($db, 'orders');
+$orderItemCols = seller_orders_table_columns($db, 'order_items');
+$listingCols = seller_orders_table_columns($db, 'listings');
+$userCols = seller_orders_table_columns($db, 'users');
+
 
 $statusOptions = [
     'all' => 'All Statuses',
@@ -184,8 +433,21 @@ $qtyExpr = isset($orderItemCols['qty']) ? 'COALESCE(oi.`qty`, 0)' : (isset($orde
 $lineTotalExpr = isset($orderItemCols['line_total']) ? 'COALESCE(oi.`line_total`, 0)' : ((isset($orderItemCols['unit_price']) && (isset($orderItemCols['qty']) || isset($orderItemCols['quantity']))) ? 'COALESCE(oi.`unit_price`, 0) * ' . $qtyExpr : '0');
 
 $params = [':seller_id' => $sellerId];
+
+$sellerOwnershipParts = [];
+if (isset($orderItemCols['seller_id'])) {
+    $sellerOwnershipParts[] = 'oi.`seller_id` = :seller_id';
+}
+if (isset($listingCols['seller_id'])) {
+    $sellerOwnershipParts[] = 'l.`seller_id` = :seller_id';
+}
+
+if (!$sellerOwnershipParts) {
+    seller_orders_http_500('Seller ownership columns not found.');
+}
+
 $where = [
-    '(oi.`seller_id` = :seller_id OR l.`seller_id` = :seller_id)',
+    '(' . implode(' OR ', $sellerOwnershipParts) . ')',
 ];
 
 $buyerJoinKey = null;
@@ -238,9 +500,7 @@ $summarySql = "
     WHERE {$whereSql}
 ";
 
-$summaryStmt = $pdo->prepare($summarySql);
-$summaryStmt->execute($params);
-$summary = (array)$summaryStmt->fetch(PDO::FETCH_ASSOC);
+$summary = seller_orders_query_one($db, $summarySql, $params);
 
 $page = isset($_GET['page']) && ctype_digit((string)$_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $perPage = 20;
@@ -258,9 +518,7 @@ $countSql = "
         GROUP BY o.`id`
     ) x
 ";
-$countStmt = $pdo->prepare($countSql);
-$countStmt->execute($params);
-$totalRows = (int)$countStmt->fetchColumn();
+$totalRows = (int)seller_orders_query_value($db, $countSql, $params);
 $totalPages = max(1, (int)ceil($totalRows / $perPage));
 if ($page > $totalPages) {
     $page = $totalPages;
@@ -298,9 +556,8 @@ $listSql = "
     LIMIT {$perPage} OFFSET {$offset}
 ";
 
-$listStmt = $pdo->prepare($listSql);
-$listStmt->execute($params);
-$rows = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+$rows = seller_orders_query_all($db, $listSql, $params);
+
 
 $viewBase = seller_orders_existing_page([
     '/seller/order_detail.php',
