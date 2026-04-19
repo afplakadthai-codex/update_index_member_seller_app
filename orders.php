@@ -239,7 +239,11 @@ if (!seller_orders_table_exists($db, 'orders')) {
 }
 
 if (seller_orders_is_pdo($db) && function_exists('bv_member_require_seller')) {
-    $user = bv_member_require_seller($db);
+    try {
+        $user = bv_member_require_seller($db);
+    } catch (ArgumentCountError $e) {
+        $user = bv_member_require_seller();
+    }
 } elseif (function_exists('bv_member_require_login')) {
     $user = bv_member_require_login();
 } else {
@@ -398,7 +402,7 @@ if (!isset($searchByOptions[$searchBy])) {
 $orderStatusExpr = isset($orderCols['status']) ? 'LOWER(COALESCE(o.`status`, \'\'))' : "''";
 $paymentStatusExpr = isset($orderCols['payment_status']) ? 'LOWER(COALESCE(o.`payment_status`, \'\'))' : "''";
 $shippingStatusExpr = isset($orderCols['shipping_status']) ? 'LOWER(COALESCE(o.`shipping_status`, \'\'))' : "''";
-$dateSoldExpr = isset($orderCols['created_at']) ? 'o.`created_at`' : (isset($orderCols['id']) ? 'o.`id`' : 'NULL');
+$dateSoldExpr = isset($orderCols['created_at']) ? 'o.`created_at`' : 'NULL';
 
 $buyerNameChain = [];
 foreach (['buyer_name', 'customer_name', 'ship_name'] as $col) {
@@ -773,19 +777,27 @@ $queryBase = [
                         <td><?= (int)($row['qty_total'] ?? 0) ?></td>
                         <td><?= bv_member_h(seller_orders_money((float)($row['subtotal_amount'] ?? 0), $currency)) ?></td>
                         <td><?= bv_member_h(seller_orders_money((float)($row['total_amount'] ?? 0), $currency)) ?></td>
-                        <td>
+                       <td>
                             <?php if (!empty($row['date_sold'])): ?>
-                                <?= bv_member_h((new DateTimeImmutable((string)$row['date_sold']))->format('Y-m-d H:i')) ?>
+                                <?php try { ?>
+                                    <?= bv_member_h((new DateTimeImmutable((string)$row['date_sold']))->format('Y-m-d H:i')) ?>
+                                <?php } catch (Throwable $e) { ?>
+                                    <span class="muted">—</span>
+                                <?php } ?>
                             <?php else: ?>
                                 <span class="muted">—</span>
                             <?php endif; ?>
                         </td>
                         <td>
                             <?php if (!empty($row['paid_at'])): ?>
-                                <?= bv_member_h((new DateTimeImmutable((string)$row['paid_at']))->format('Y-m-d H:i')) ?>
+                                <?php try { ?>
+                                    <?= bv_member_h((new DateTimeImmutable((string)$row['paid_at']))->format('Y-m-d H:i')) ?>
+                                <?php } catch (Throwable $e) { ?>
+                                    <span class="muted">—</span>
+                                <?php } ?>
                             <?php else: ?>
                                 <span class="muted">—</span>
-                            <?php endif; ?>
+                            <?php endif; ?> 
                         </td>
                         <td><span class="badge" style="<?= bv_member_h(str_replace(';', ';', str_replace(':', ':', str_replace(',', ';', $orderBadge['style'])))) ?>"><?= bv_member_h($orderBadge['label']) ?></span></td>
                         <td><span class="badge" style="<?= bv_member_h(str_replace(';', ';', str_replace(':', ':', str_replace(',', ';', $paymentBadge['style'])))) ?>"><?= bv_member_h($paymentBadge['label']) ?></span></td>
