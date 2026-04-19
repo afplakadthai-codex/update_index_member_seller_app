@@ -119,6 +119,41 @@ if (!function_exists('seller_orders_mysqli_bind_execute')) {
     }
 }
 
+if (!function_exists('seller_orders_pdo_execute')) {
+    function seller_orders_pdo_execute(PDOStatement $stmt, string $sql, array $params = []): void
+    {
+        $hasNamedPlaceholders = (bool) preg_match('/:[a-zA-Z_][a-zA-Z0-9_]*/', $sql);
+        $hasPositionalPlaceholders = strpos($sql, '?') !== false;
+
+        if ($hasNamedPlaceholders && $hasPositionalPlaceholders) {
+            throw new RuntimeException('Mixed named and positional placeholders are not supported.');
+        }
+
+        if ($hasNamedPlaceholders) {
+            $normalized = [];
+
+            foreach ($params as $key => $value) {
+                if (is_int($key)) {
+                    $normalized[$key] = $value;
+                    continue;
+                }
+
+                $key = (string) $key;
+                if ($key !== '' && $key[0] !== ':') {
+                    $key = ':' . $key;
+                }
+
+                $normalized[$key] = $value;
+            }
+
+            $stmt->execute($normalized);
+            return;
+        }
+
+        $stmt->execute(array_values($params));
+    }
+}
+
 if (!function_exists('seller_orders_query_all')) {
     function seller_orders_query_all($db, string $sql, array $params = []): array
     {
@@ -127,7 +162,7 @@ if (!function_exists('seller_orders_query_all')) {
             if (!$stmt) {
                 throw new RuntimeException('Failed to prepare PDO statement.');
             }
-            $stmt->execute($params);
+            seller_orders_pdo_execute($stmt, $sql, $params);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             return is_array($rows) ? $rows : [];
         }
@@ -466,14 +501,16 @@ if (isset($listingCols['title'])) {
 $itemTitleExpr = 'COALESCE(' . implode(', ', array_merge($itemTitleChain, ["'—'"])) . ')';
 $qtyExpr = isset($orderItemCols['qty']) ? 'COALESCE(oi.`qty`, 0)' : (isset($orderItemCols['quantity']) ? 'COALESCE(oi.`quantity`, 0)' : '0');
 $lineTotalExpr = isset($orderItemCols['line_total']) ? 'COALESCE(oi.`line_total`, 0)' : ((isset($orderItemCols['unit_price']) && (isset($orderItemCols['qty']) || isset($orderItemCols['quantity']))) ? 'COALESCE(oi.`unit_price`, 0) * ' . $qtyExpr : '0');
-$params = [':seller_id' => $sellerId];
+$params = [];
 
 $sellerOwnershipParts = [];
 if (isset($orderItemCols['seller_id'])) {
-    $sellerOwnershipParts[] = 'oi.`seller_id` = :seller_id';
+    $sellerOwnershipParts[] = 'oi.`seller_id` = :seller_id_oi';
+    $params[':seller_id_oi'] = $sellerId;
 }
 if (isset($listingCols['seller_id'])) {
-    $sellerOwnershipParts[] = 'l.`seller_id` = :seller_id';
+    $sellerOwnershipParts[] = 'l.`seller_id` = :seller_id_l';
+    $params[':seller_id_l'] = $sellerId;
 }
 
 if (!$sellerOwnershipParts) {
