@@ -118,9 +118,46 @@ if (!function_exists('bv_member_sd_pdo')) {
 }
 
 if (!function_exists('bv_member_sd_seller_id')) {
-    function bv_member_sd_seller_id(array $user): int
+     function bv_member_sd_seller_id(PDO $pdo, array $user): int  
     {
-        return (int)($user['id'] ?? 0);
+        $userId = (int)($user['id'] ?? 0);
+        if ($userId <= 0) {
+            return 0;
+        }
+
+        try {
+            if (bv_member_table_exists($pdo, 'seller_applications')) {
+                $sellerAppCols = bv_member_generic_table_columns($pdo, 'seller_applications');
+                if (!empty($sellerAppCols['user_id'])) {
+                    $stmt = $pdo->prepare('SELECT user_id FROM seller_applications WHERE user_id = :user_id LIMIT 1');
+                    $stmt->execute([':user_id' => $userId]);
+                    $mappedUserId = (int)$stmt->fetchColumn();
+                    if ($mappedUserId > 0) {
+                        return $mappedUserId;
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            // keep backward-compatible fallback
+        }
+
+        try {
+            if (bv_member_table_exists($pdo, 'listings')) {
+                $listingCols = bv_member_generic_table_columns($pdo, 'listings');
+                if (!empty($listingCols['seller_id'])) {
+                    $stmt = $pdo->prepare('SELECT seller_id FROM listings WHERE seller_id = :seller_id LIMIT 1');
+                    $stmt->execute([':seller_id' => $userId]);
+                    $listingSellerId = (int)$stmt->fetchColumn();
+                    if ($listingSellerId > 0) {
+                        return $listingSellerId;
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            // keep backward-compatible fallback
+        }
+
+        return $userId;
     }
 }
 
@@ -756,7 +793,7 @@ if ($userId > 0) {
 
 
 if ($isSellerApproved && $userId > 0) {
-    $sellerId = bv_member_sd_seller_id($user);
+    $sellerId = bv_member_sd_seller_id($pdo, $user);   
 
     $orderPage = bv_member_sd_existing_page(['/seller/order_detail.php', '/member/order_detail.php', '/member/order_view.php', '/seller/orders.php']);
     $refundPage = bv_member_sd_existing_page(['/seller/refund_view.php', '/seller/refunds.php']);
@@ -771,12 +808,16 @@ if ($isSellerApproved && $userId > 0) {
 
             $orderCodeExpr = !empty($orderCols['order_code']) ? 'o.order_code' : ( !empty($orderCols['id']) ? "CONCAT('ORD-', o.id)" : "'-'");
             $buyerNameCandidates = [];
-            if (!empty($orderCols['buyer_name'])) $buyerNameCandidates[] = 'o.buyer_name';
-            if (!empty($orderCols['customer_name'])) $buyerNameCandidates[] = 'o.customer_name';
-            if (!empty($userCols['display_name'])) $buyerNameCandidates[] = 'u.display_name';
-            if (!empty($userCols['first_name'])) $buyerNameCandidates[] = 'u.first_name';
-            if (!empty($userCols['email'])) $buyerNameCandidates[] = 'u.email';
-            $buyerNameExpr = bv_member_sd_pick_expr($buyerNameCandidates, "'Buyer'");
+           if (!empty($orderCols['buyer_name'])) $buyerNameCandidates[] = "NULLIF(TRIM(o.buyer_name), '')";
+            if (!empty($orderCols['customer_name'])) $buyerNameCandidates[] = "NULLIF(TRIM(o.customer_name), '')";
+            if (!empty($orderCols['ship_name'])) $buyerNameCandidates[] = "NULLIF(TRIM(o.ship_name), '')";
+            if (!empty($userCols['first_name']) && !empty($userCols['last_name'])) {
+                $buyerNameCandidates[] = "NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), '')";
+            }
+            if (!empty($userCols['email'])) $buyerNameCandidates[] = "NULLIF(TRIM(u.email), '')";
+            if (!empty($orderCols['buyer_email'])) $buyerNameCandidates[] = "NULLIF(TRIM(o.buyer_email), '')";
+            if (!empty($orderCols['ship_email'])) $buyerNameCandidates[] = "NULLIF(TRIM(o.ship_email), '')";
+            $buyerNameExpr = $buyerNameCandidates ? 'COALESCE(' . implode(', ', $buyerNameCandidates) . ", 'Customer')" : "'Customer'";
 
             $qtyCandidates = [];
             if (!empty($orderItemCols['quantity'])) $qtyCandidates[] = 'oi.quantity';
@@ -868,6 +909,24 @@ if ($isSellerApproved && $userId > 0) {
 
             $refundCodeExpr = !empty($refundCols['refund_code']) ? 'r.refund_code' : "CONCAT('RF-', r.id)";
             $orderCodeExpr = !empty($orderCols['order_code']) ? 'o.order_code' : "CONCAT('ORD-', o.id)";
+			            $refundBuyerNameCandidates = [];
+            if (!empty($orderCols['buyer_name'])) $refundBuyerNameCandidates[] = "NULLIF(TRIM(o.buyer_name), '')";
+            if (!empty($orderCols['customer_name'])) $refundBuyerNameCandidates[] = "NULLIF(TRIM(o.customer_name), '')";
+            if (!empty($orderCols['ship_name'])) $refundBuyerNameCandidates[] = "NULLIF(TRIM(o.ship_name), '')";
+            $refundUserCols = bv_member_sd_table_exists($pdo, 'users') ? bv_member_sd_columns($pdo, 'users') : [];
+            if (!empty($refundUserCols['first_name']) && !empty($refundUserCols['last_name'])) {
+                $refundBuyerNameCandidates[] = "NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), '')";
+            }
+            if (!empty($refundUserCols['email'])) $refundBuyerNameCandidates[] = "NULLIF(TRIM(u.email), '')";
+            if (!empty($orderCols['buyer_email'])) $refundBuyerNameCandidates[] = "NULLIF(TRIM(o.buyer_email), '')";
+            if (!empty($orderCols['ship_email'])) $refundBuyerNameCandidates[] = "NULLIF(TRIM(o.ship_email), '')";
+            $refundBuyerNameExpr = $refundBuyerNameCandidates ? 'COALESCE(' . implode(', ', $refundBuyerNameCandidates) . ", 'Customer')" : "'Customer'";
+            $refundBuyerJoinExpr = 'o.user_id';
+            if (!empty($orderCols['buyer_user_id'])) {
+                $refundBuyerJoinExpr = 'o.buyer_user_id';
+            } elseif (!empty($orderCols['member_id'])) {
+                $refundBuyerJoinExpr = 'o.member_id';
+            }
             $requestedAtExpr = !empty($refundCols['requested_at']) ? 'r.requested_at' : ( !empty($refundCols['created_at']) ? 'r.created_at' : 'NOW()');
             $approvedAtExpr = !empty($refundCols['approved_at']) ? 'r.approved_at' : ( !empty($refundCols['processing_started_at']) ? 'r.processing_started_at' : ( !empty($refundCols['updated_at']) ? 'r.updated_at' : 'NULL'));
             $refundStatusExpr = !empty($refundCols['status']) ? 'r.status' : "'pending'";
@@ -886,6 +945,7 @@ if ($isSellerApproved && $userId > 0) {
                      MAX(" . $refundCodeExpr . ") AS refund_code,
                     MAX(COALESCE(r.order_id, o.id)) AS order_id,
                     MAX(" . $orderCodeExpr . ") AS order_code,
+                    MAX(COALESCE(" . $refundBuyerNameExpr . ", 'Customer')) AS buyer_name,					
                     MAX(" . $requestedAtExpr . ") AS requested_at,
                     MAX(" . $approvedAtExpr . ") AS approved_at,
                     MAX(COALESCE(" . $refundStatusExpr . ", 'pending')) AS refund_status,
@@ -897,6 +957,7 @@ if ($isSellerApproved && $userId > 0) {
                  LEFT JOIN order_items oi ON oi.id = ri.order_item_id
                 LEFT JOIN listings l ON l.id = COALESCE(ri.listing_id, oi.listing_id)
                 LEFT JOIN orders o ON o.id = oi.order_id
+              LEFT JOIN users u ON u.id = " . $refundBuyerJoinExpr . "				
                  WHERE (" . implode(' OR ', $refundOwnershipWhere) . ")
                 GROUP BY r.id
               ORDER BY MAX(" . $requestedAtExpr . ") DESC, r.id DESC 
