@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+error_reporting(E_ALL);
+
 $bootstrapCandidates = [
     __DIR__ . '/_listing_bootstrap.php',
     dirname(__DIR__) . '/member/_listing_bootstrap.php',
@@ -237,16 +241,40 @@ if (!$db) {
 if (!seller_orders_table_exists($db, 'orders')) {
     seller_orders_http_500('Orders table not found.');
 }
-
-if (seller_orders_is_pdo($db) && function_exists('bv_member_require_seller')) {
+$user = [];
+if (function_exists('bv_member_require_seller')) {
     try {
-        $user = bv_member_require_seller($db);
+        if (seller_orders_is_pdo($db)) {
+            $user = (array)bv_member_require_seller($db);
+        } else {
+            $user = (array)bv_member_require_seller();
+        }
     } catch (ArgumentCountError $e) {
-        $user = bv_member_require_seller();
+        try {
+            $user = (array)bv_member_require_seller();
+        } catch (Throwable $ignored) {
+            $user = [];
+        }
+    } catch (TypeError $e) {
+        try {
+            $user = (array)bv_member_require_seller();
+        } catch (Throwable $ignored) {
+            $user = [];
+        }
+    } catch (Throwable $e) {
+        $user = [];
     }
-} elseif (function_exists('bv_member_require_login')) {
-    $user = bv_member_require_login();
-} else {
+}
+
+if (!$user && function_exists('bv_member_require_login')) {
+    try {
+        $user = (array)bv_member_require_login();
+    } catch (Throwable $e) {
+        $user = [];
+    }
+}
+
+if (!$user) {
     $user = (array)($_SESSION['user'] ?? $_SESSION['member'] ?? []);
 }
 
@@ -351,8 +379,10 @@ if (!function_exists('seller_orders_existing_page')) {
 }
 
 $orderCols = seller_orders_table_columns($db, 'orders');
-$orderItemCols = seller_orders_table_columns($db, 'order_items');
-$listingCols = seller_orders_table_columns($db, 'listings');
+$hasOrderItemsTable = seller_orders_table_exists($db, 'order_items');
+$hasListingsTable = seller_orders_table_exists($db, 'listings');
+$orderItemCols = $hasOrderItemsTable ? seller_orders_table_columns($db, 'order_items') : [];
+$listingCols = $hasListingsTable ? seller_orders_table_columns($db, 'listings') : [];
 $hasUsersTable = seller_orders_table_exists($db, 'users');
 $userCols = $hasUsersTable ? seller_orders_table_columns($db, 'users') : [];
 
@@ -436,7 +466,6 @@ if (isset($listingCols['title'])) {
 $itemTitleExpr = 'COALESCE(' . implode(', ', array_merge($itemTitleChain, ["'—'"])) . ')';
 $qtyExpr = isset($orderItemCols['qty']) ? 'COALESCE(oi.`qty`, 0)' : (isset($orderItemCols['quantity']) ? 'COALESCE(oi.`quantity`, 0)' : '0');
 $lineTotalExpr = isset($orderItemCols['line_total']) ? 'COALESCE(oi.`line_total`, 0)' : ((isset($orderItemCols['unit_price']) && (isset($orderItemCols['qty']) || isset($orderItemCols['quantity']))) ? 'COALESCE(oi.`unit_price`, 0) * ' . $qtyExpr : '0');
-
 $params = [':seller_id' => $sellerId];
 
 $sellerOwnershipParts = [];
@@ -448,7 +477,7 @@ if (isset($listingCols['seller_id'])) {
 }
 
 if (!$sellerOwnershipParts) {
-    seller_orders_http_500('Seller ownership columns not found.');
+    $sellerOwnershipParts[] = '1=0';
 }
 
 $where = [
@@ -465,6 +494,8 @@ foreach (['buyer_user_id', 'member_id', 'user_id'] as $candidateCol) {
 $buyerJoinSql = ($buyerJoinKey !== null && $hasUsersTable)
     ? "LEFT JOIN `users` u ON u.`id` = o.`{$buyerJoinKey}`"
     : '';
+$orderItemsJoinSql = $hasOrderItemsTable ? "LEFT JOIN `order_items` oi ON oi.`order_id` = o.`id`" : '';
+$listingsJoinSql = $hasListingsTable ? "LEFT JOIN `listings` l ON l.`id` = oi.`listing_id`" : '';
 
 if ($statusFilter !== 'all') {
     $params[':status_filter'] = $statusFilter;
@@ -499,8 +530,8 @@ $summarySql = "
         COUNT(DISTINCT CASE WHEN {$orderStatusExpr} = 'completed' THEN o.`id` END) AS completed_count,
         COUNT(DISTINCT CASE WHEN {$orderStatusExpr} IN ('cancelled','refunded') THEN o.`id` END) AS cancelled_refunded_count
     FROM `orders` o
-    LEFT JOIN `order_items` oi ON oi.`order_id` = o.`id`
-    LEFT JOIN `listings` l ON l.`id` = oi.`listing_id`
+    {$orderItemsJoinSql}
+    {$listingsJoinSql}
      {$buyerJoinSql}
     WHERE {$whereSql}
 ";
@@ -516,8 +547,8 @@ $countSql = "
     FROM (
         SELECT o.`id`
         FROM `orders` o
-        LEFT JOIN `order_items` oi ON oi.`order_id` = o.`id`
-        LEFT JOIN `listings` l ON l.`id` = oi.`listing_id`
+        {$orderItemsJoinSql}
+        {$listingsJoinSql}
         {$buyerJoinSql}
         WHERE {$whereSql}
         GROUP BY o.`id`
@@ -552,8 +583,8 @@ $listSql = "
         {$paymentStatusExpr} AS payment_status,
         {$shippingStatusExpr} AS shipping_status
     FROM `orders` o
-    LEFT JOIN `order_items` oi ON oi.`order_id` = o.`id`
-    LEFT JOIN `listings` l ON l.`id` = oi.`listing_id`
+    {$orderItemsJoinSql}
+    {$listingsJoinSql}
     {$buyerJoinSql}
     WHERE {$whereSql}
     GROUP BY o.`id`, order_code, buyer_display, subtotal_amount, total_amount, currency_code, order_status, payment_status, shipping_status
