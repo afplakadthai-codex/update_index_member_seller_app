@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once dirname(__DIR__) . '/_listing_bootstrap.php';
+require_once dirname(__DIR__) . '/member/_listing_bootstrap.php';
 
 $pdo = bv_member_pdo();
 $user = bv_member_require_seller($pdo);
